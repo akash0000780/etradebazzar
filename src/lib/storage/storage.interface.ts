@@ -1,0 +1,27 @@
+export interface UploadInput {
+    key: string; // S3 object key 
+    buffer: Buffer;
+    mimeType: string;
+    size: number;
+}
+
+export interface UploadResult {
+    key: string;
+    url: string;
+}
+
+export interface SignedUrlInput {
+    key: string;
+    expiresIn?: number;
+}
+
+export interface DeleteInput {
+    key: string;
+}
+
+export interface StorageProvider {
+    upload(input: UploadInput): Promise<UploadResult>;
+    delete(input: DeleteInput): Promise<void>;
+    getSignedUrl(input: SignedUrlInput): Promise<string>;
+    getPublicUrl(key: string): string;
+}

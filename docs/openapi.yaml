@@ -1,0 +1,4447 @@
+openapi: 3.1.0
+
+info:
+  title: eTradeBazaar API
+  version: 1.0.0
+  description: |
+    REST API for the eTradeBazaar multi-tenant marketplace platform.
+
+    The platform operates across three actor types: platform administrators,
+    sellers (multi-member tenants), and customers. Authentication is JWT-based.
+    All protected endpoints require a Bearer token in the Authorization header.
+
+    Base URL: https://api.etradebazaar.com
+
+servers:
+  - url: https://api.etradebazaar.com
+    description: Production
+  - url: https://staging-api.etradebazaar.com
+    description: Staging
+  - url: http://localhost:3000
+    description: Local development
+
+tags:
+  - name: Auth
+    description: Authentication  login, logout, token refresh, and current user.
+  - name: Sellers
+    description: Seller registration, onboarding, KYC, bank details, members, and platform admin actions.
+  - name: Shops
+    description: Seller-scoped shop management.
+  - name: Products
+    description: Product CRUD, approval workflow, bulk upload, and search.
+  - name: Product Images
+    description: Image upload, deletion, and reordering for a product.
+  - name: Product Variants
+    description: Variant options, values, and SKUs for a product.
+  - name: Categories
+    description: Product category tree management.
+  - name: Orders
+    description: Order creation, negotiation, address assignment, thresholds, and commissions.
+  - name: Payments
+    description: Razorpay advance and final payments, verification, refunds, and webhooks.
+  - name: Shipments
+    description: Shiprocket-backed shipment creation, tracking, cancellation, and serviceability.
+  - name: Returns
+    description: Customer return requests and seller/admin review.
+  - name: Payouts
+    description: Seller payout initiation, history, and platform configuration.
+  - name: Analytics
+    description: Seller and platform-level analytics and materialized view refresh.
+  - name: Notifications
+    description: In-app notifications with SSE streaming.
+  - name: Platform
+    description: Platform role and member management, and audit logs.
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Obtain a token via POST /api/auth/login. Pass it as:
+        Authorization: Bearer <token>
+
+  parameters:
+    sellerId:
+      name: sellerId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the seller.
+    shopId:
+      name: shopId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the shop.
+    productId:
+      name: productId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the product.
+    categoryId:
+      name: categoryId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the category.
+    orderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the order.
+    negotiationId:
+      name: negotiationId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the negotiation record.
+    addressId:
+      name: addressId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the order address.
+    shipmentId:
+      name: shipmentId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the shipment.
+    returnId:
+      name: returnId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the return request.
+    payoutId:
+      name: payoutId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the payout.
+    memberId:
+      name: memberId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the member.
+    roleId:
+      name: roleId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the role.
+    optionId:
+      name: optionId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the variant option.
+    valueId:
+      name: valueId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the variant option value.
+    skuId:
+      name: skuId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the product SKU.
+    imageId:
+      name: imageId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: CUID of the product image.
+    viewName:
+      name: viewName
+      in: path
+      required: true
+      schema:
+        type: string
+        enum:
+          - seller_order_stats
+          - seller_product_stats
+          - seller_daily_revenue
+          - platform_daily_stats
+          - platform_seller_stats
+      description: Name of the materialized view to refresh.
+
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          description: Present on successful responses that return a payload.
+
+    MessageEnvelope:
+      type: object
+      required:
+        - success
+        - message
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Resource deleted.
+
+    ErrorEnvelope:
+      type: object
+      required:
+        - success
+        - error
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: Resource not found.
+
+    Address:
+      type: object
+      required:
+        - street
+        - city
+        - state
+        - pincode
+      properties:
+        street:
+          type: string
+          example: 12, MG Road
+        city:
+          type: string
+          example: Ahmedabad
+        state:
+          type: string
+          example: Gujarat
+        pincode:
+          type: string
+          pattern: '^\d{6}$'
+          example: "380001"
+
+    DeliveryAddress:
+      allOf:
+        - $ref: "#/components/schemas/Address"
+        - type: object
+          required:
+            - receiverName
+            - phone
+          properties:
+            receiverName:
+              type: string
+              example: Rahul Mehta
+            phone:
+              type: string
+              pattern: '^\+?[6-9]\d{9}$'
+              example: "9876543210"
+            latitude:
+              type: number
+              format: double
+              example: 23.0225
+            longitude:
+              type: number
+              format: double
+              example: 72.5714
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clxyz1234abcd
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        name:
+          type: string
+          nullable: true
+          example: Rahul Mehta
+        isActive:
+          type: boolean
+          example: true
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Seller:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clxyz1234abcd
+        name:
+          type: string
+          example: Rahul Mehta
+        email:
+          type: string
+          format: email
+          example: seller@example.com
+        phone:
+          type: string
+          example: "9876543210"
+        businessName:
+          type: string
+          example: Mehta Traders Pvt Ltd
+        businessType:
+          $ref: "#/components/schemas/BusinessType"
+        street:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        pincode:
+          type: string
+        status:
+          $ref: "#/components/schemas/SellerStatus"
+        invitedBy:
+          type: string
+          nullable: true
+        suspendedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Shop:
+      type: object
+      properties:
+        id:
+          type: string
+        sellerId:
+          type: string
+        name:
+          type: string
+          example: Mehta Electronics
+        slug:
+          type: string
+          example: mehta-electronics
+        description:
+          type: string
+          nullable: true
+        category:
+          type: string
+          example: Electronics
+        logo:
+          type: string
+          format: uri
+          nullable: true
+        banner:
+          type: string
+          format: uri
+          nullable: true
+        contactEmail:
+          type: string
+          format: email
+        contactPhone:
+          type: string
+        returnPolicy:
+          type: string
+          nullable: true
+        pickupStreet:
+          type: string
+        pickupCity:
+          type: string
+        pickupState:
+          type: string
+        pickupPincode:
+          type: string
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        status:
+          $ref: "#/components/schemas/ApprovalStatus"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: string
+        shopId:
+          type: string
+        sellerId:
+          type: string
+        categoryId:
+          type: string
+        name:
+          type: string
+          example: Wireless Bluetooth Headset
+        description:
+          type: string
+          nullable: true
+        price:
+          type: number
+          format: double
+          nullable: true
+          example: 1299.00
+        compareAtPrice:
+          type: number
+          format: double
+          nullable: true
+          example: 1599.00
+        sku:
+          type: string
+          nullable: true
+          example: SKU-WBH-001
+        stock:
+          type: integer
+          nullable: true
+          example: 150
+        lowStockThreshold:
+          type: integer
+          nullable: true
+        weightGrams:
+          type: integer
+          nullable: true
+        length:
+          type: number
+          nullable: true
+        width:
+          type: number
+          nullable: true
+        height:
+          type: number
+          nullable: true
+        isDigital:
+          type: boolean
+          example: false
+        status:
+          $ref: "#/components/schemas/ApprovalStatus"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ProductImage:
+      type: object
+      properties:
+        id:
+          type: string
+        productId:
+          type: string
+        url:
+          type: string
+          format: uri
+        key:
+          type: string
+        order:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+
+    VariantOption:
+      type: object
+      properties:
+        id:
+          type: string
+        productId:
+          type: string
+        name:
+          type: string
+          example: Color
+        values:
+          type: array
+          items:
+            $ref: "#/components/schemas/VariantOptionValue"
+
+    VariantOptionValue:
+      type: object
+      properties:
+        id:
+          type: string
+        optionId:
+          type: string
+        value:
+          type: string
+          example: Red
+
+    ProductSKU:
+      type: object
+      properties:
+        id:
+          type: string
+        productId:
+          type: string
+        sku:
+          type: string
+          example: SKU-WBH-RED-L
+        price:
+          type: number
+          format: double
+          example: 1299.00
+        stock:
+          type: integer
+          example: 50
+        minQuantity:
+          type: integer
+          example: 1
+        options:
+          type: object
+          additionalProperties:
+            type: string
+          description: Key-value map of variant option names to selected values.
+          example:
+            Color: Red
+            Size: L
+
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: Electronics
+        slug:
+          type: string
+          example: electronics
+        description:
+          type: string
+          nullable: true
+        parentId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+        sellerId:
+          type: string
+        customerId:
+          type: string
+        type:
+          $ref: "#/components/schemas/OrderType"
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        totalAmount:
+          type: number
+          format: double
+          example: 3897.00
+        finalAmount:
+          type: number
+          format: double
+          nullable: true
+        commissionRate:
+          type: number
+          format: double
+          nullable: true
+        commissionAmount:
+          type: number
+          format: double
+          nullable: true
+        paymentStatus:
+          $ref: "#/components/schemas/PaymentStatus"
+        assignedShopId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    OrderItem:
+      type: object
+      properties:
+        id:
+          type: string
+        orderId:
+          type: string
+        productId:
+          type: string
+        skuId:
+          type: string
+          nullable: true
+        quantity:
+          type: integer
+        unitPrice:
+          type: number
+          format: double
+        finalUnitPrice:
+          type: number
+          format: double
+          nullable: true
+        selectedOptions:
+          type: object
+          nullable: true
+
+    OrderNegotiation:
+      type: object
+      properties:
+        id:
+          type: string
+        orderId:
+          type: string
+        proposedBy:
+          type: string
+        proposedByType:
+          type: string
+          enum: [seller, customer]
+        proposedPrice:
+          type: number
+          format: double
+        status:
+          $ref: "#/components/schemas/NegotiationStatus"
+        meetLink:
+          type: string
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    Payment:
+      type: object
+      properties:
+        id:
+          type: string
+        orderId:
+          type: string
+        razorpayOrderId:
+          type: string
+        razorpayPaymentId:
+          type: string
+          nullable: true
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+          example: INR
+        type:
+          $ref: "#/components/schemas/PaymentType"
+        status:
+          $ref: "#/components/schemas/PaymentStatus"
+        attempts:
+          type: integer
+        refundId:
+          type: string
+          nullable: true
+        refundAmount:
+          type: number
+          format: double
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    Shipment:
+      type: object
+      properties:
+        id:
+          type: string
+        orderId:
+          type: string
+        orderAddressId:
+          type: string
+          nullable: true
+        shopId:
+          type: string
+        provider:
+          type: string
+          example: SHIPROCKET
+        trackingId:
+          type: string
+          nullable: true
+        trackingUrl:
+          type: string
+          format: uri
+          nullable: true
+        status:
+          $ref: "#/components/schemas/ShipmentStatus"
+        estimatedDelivery:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    ReturnRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        orderId:
+          type: string
+        customerId:
+          type: string
+        reason:
+          type: string
+        status:
+          $ref: "#/components/schemas/ReturnStatus"
+        approvedBy:
+          type: string
+          nullable: true
+        rejectedBy:
+          type: string
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    SellerPayout:
+      type: object
+      properties:
+        id:
+          type: string
+        sellerId:
+          type: string
+        grossAmount:
+          type: number
+          format: double
+        commissionAmount:
+          type: number
+          format: double
+        netAmount:
+          type: number
+          format: double
+        method:
+          $ref: "#/components/schemas/PayoutMethod"
+        razorpayPayoutId:
+          type: string
+          nullable: true
+        utrReference:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/PayoutStatus"
+        failureReason:
+          type: string
+          nullable: true
+        paidAt:
+          type: string
+          format: date-time
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        periodStart:
+          type: string
+          format: date-time
+          nullable: true
+        periodEnd:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    SellerKyc:
+      type: object
+      properties:
+        id:
+          type: string
+        sellerId:
+          type: string
+        aadharNumber:
+          type: string
+          example: "123456789012"
+        panNumber:
+          type: string
+          example: ABCDE1234F
+        gstNumber:
+          type: string
+          nullable: true
+        businessRegNumber:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/KycStatus"
+        rejectedReason:
+          type: string
+          nullable: true
+        verifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    SellerBankDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        sellerId:
+          type: string
+        accountHolderName:
+          type: string
+        accountNumber:
+          type: string
+        ifscCode:
+          type: string
+          example: SBIN0001234
+        bankName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    PlatformRole:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: product_reviewer
+        description:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    PlatformMember:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        roleId:
+          type: string
+        role:
+          $ref: "#/components/schemas/PlatformRole"
+        createdAt:
+          type: string
+          format: date-time
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        type:
+          $ref: "#/components/schemas/NotificationType"
+        title:
+          type: string
+        message:
+          type: string
+        data:
+          type: object
+          nullable: true
+        isRead:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+        sellerId:
+          type: string
+          nullable: true
+        actorId:
+          type: string
+        actorType:
+          type: string
+        action:
+          type: string
+        entityType:
+          type: string
+        entityId:
+          type: string
+        metadata:
+          type: object
+          nullable: true
+        ipAddress:
+          type: string
+          nullable: true
+        userAgent:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    BusinessType:
+      type: string
+      enum: [INDIVIDUAL, COMPANY, PARTNERSHIP]
+
+    SellerStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, SUSPENDED]
+
+    KycStatus:
+      type: string
+      enum: [PENDING, VERIFIED, REJECTED]
+
+    ApprovalStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED]
+
+    InviteStatus:
+      type: string
+      enum: [PENDING, ACCEPTED, EXPIRED, REVOKED]
+
+    OrderType:
+      type: string
+      enum: [STANDARD, HIGH_TICKET, SAMPLE, BULK]
+
+    OrderStatus:
+      type: string
+      enum:
+        [
+          PENDING,
+          NEGOTIATING,
+          CONFIRMED,
+          PROCESSING,
+          SHIPPED,
+          DELIVERED,
+          CANCELLED,
+        ]
+
+    PaymentStatus:
+      type: string
+      enum: [UNPAID, PARTIALLY_PAID, PAID, REFUNDED, PARTIALLY_REFUNDED, FAILED]
+
+    PaymentType:
+      type: string
+      enum: [ADVANCE, FINAL]
+
+    PayoutMethod:
+      type: string
+      enum: [UPI, IMPS, RTGS, NEFT]
+
+    PayoutStatus:
+      type: string
+      enum: [PENDING, PROCESSING, PAID, FAILED, QUEUED]
+
+    NegotiationStatus:
+      type: string
+      enum: [PENDING, ACCEPTED, REJECTED, COUNTERED]
+
+    ShipmentStatus:
+      type: string
+      enum:
+        [
+          PENDING,
+          BOOKED,
+          IN_TRANSIT,
+          OUT_FOR_DELIVERY,
+          DELIVERED,
+          FAILED,
+          RETURNED,
+        ]
+
+    ReturnStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, PICKED_UP, COMPLETED]
+
+    FulfillmentStatus:
+      type: string
+      enum: [PENDING, ASSIGNED, PROCESSING, SHIPPED, DELIVERED, FAILED]
+
+    NotificationType:
+      type: string
+      enum:
+        - SELLER_APPROVED
+        - SELLER_REJECTED
+        - PRODUCT_APPROVED
+        - PRODUCT_REJECTED
+        - ORDER_PLACED
+        - ORDER_CONFIRMED
+        - SHIPMENT_UPDATED
+        - PAYMENT_RECEIVED
+        - KYC_VERIFIED
+        - KYC_REJECTED
+        - RETURN_REQUESTED
+        - RETURN_APPROVED
+        - RETURN_REJECTED
+        - PAYOUT_INITIATED
+        - PAYOUT_PAID
+        - PAYOUT_FAILED
+        - PRODUCT_LOW_STOCK
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid Bearer token.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+            example:
+              error: No token provided
+    Forbidden:
+      description: Authenticated but insufficient role or account not approved.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            success: false
+            error: Insufficient platform permissions
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Conflict:
+      description: The request conflicts with existing state.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    BadRequest:
+      description: Validation failure or a business rule violation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    InternalError:
+      description: An unexpected server-side error occurred.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            success: false
+            error: Internal server error
+    TooManyRequests:
+      description: Rate limit exceeded.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying.
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+              error:
+                type: string
+              retryAfter:
+                type: integer
+          example:
+            success: false
+            error: Too many requests - please try again later
+            retryAfter: 45
+
+paths:
+  /health:
+    get:
+      tags: [Auth]
+      summary: Health check
+      security: []
+      description: Returns server uptime and environment. No authentication required.
+      responses:
+        "200":
+          description: Server is healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  uptime:
+                    type: number
+                    example: 3612.5
+                  timestamp:
+                    type: string
+                    format: date-time
+                  environment:
+                    type: string
+                    example: production
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login
+      security: []
+      description: |
+        Authenticates a user with email and password. Returns a short-lived access token
+        and a long-lived refresh token. Both sellers and platform admins use this endpoint.
+
+        Rate limit: 10 requests per minute per IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: seller@example.com
+                password:
+                  type: string
+                  format: password
+                  minLength: 6
+                  example: secret123
+      responses:
+        "200":
+          description: Login successful.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  accessToken:
+                    type: string
+                    description: JWT access token. Short-lived.
+                  refreshToken:
+                    type: string
+                    description: JWT refresh token. Valid for 7 days.
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      email:
+                        type: string
+                      name:
+                        type: string
+                        nullable: true
+        "401":
+          description: Invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                success: false
+                error: Invalid credentials
+        "403":
+          description: Account is disabled.
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout
+      description: |
+        Invalidates the current access token by adding its JTI to a Redis blacklist.
+        The token TTL is respected so the blacklist entry expires naturally.
+      responses:
+        "200":
+          description: Logged out successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageEnvelope"
+              example:
+                success: true
+                message: Logged out
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      security: []
+      description: |
+        Issues a new access token and rotates the refresh token. Pass the refresh token
+        in the request body or as the `refreshToken` cookie.
+
+        Rate limit: 10 requests per minute per IP.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+                  description: Required if not sent as a cookie.
+      responses:
+        "200":
+          description: Tokens refreshed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  accessToken:
+                    type: string
+                  refreshToken:
+                    type: string
+        "401":
+          description: Missing or invalid refresh token.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                example:
+                  error: Invalid refresh token
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user
+      description: |
+        Returns the authenticated user's profile. If the user is a seller, the response
+        includes the seller's current approval status.
+      responses:
+        "200":
+          description: Current user profile.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/User"
+                      - type: object
+                        properties:
+                          sellerId:
+                            type: string
+                            nullable: true
+                          role:
+                            type: string
+                            example: seller
+                          status:
+                            type: string
+                            nullable: true
+                            description: Present when the user is a seller.
+                          isApproved:
+                            type: boolean
+                            nullable: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/sellers/register:
+    post:
+      tags: [Sellers]
+      summary: Register as a seller
+      security: []
+      description: |
+        Creates a new seller account. The seller starts in PENDING status and must be
+        approved by a platform admin before accessing any protected seller endpoints.
+
+        Rate limit: 100 requests per minute per IP (public limiter).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [
+                  name,
+                  email,
+                  password,
+                  phone,
+                  businessName,
+                  businessType,
+                  address,
+                ]
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: Rahul Mehta
+                email:
+                  type: string
+                  format: email
+                  example: rahul@mehtaco.in
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+                phone:
+                  type: string
+                  pattern: '^\+?[6-9]\d{9}$'
+                  example: "9876543210"
+                businessName:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: Mehta Traders Pvt Ltd
+                businessType:
+                  $ref: "#/components/schemas/BusinessType"
+                address:
+                  $ref: "#/components/schemas/Address"
+      responses:
+        "201":
+          description: Seller registered. Awaiting admin approval.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Seller"
+        "409":
+          description: Email already registered.
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/sellers/invite:
+    post:
+      tags: [Sellers]
+      summary: Invite a seller
+      description: |
+        Sends an invite to an email address. The invited seller receives a unique token
+        to complete registration via POST /api/sellers/invite/accept.
+
+        "Required platform role: super_admin or onboarding_manager."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "201":
+          description: Invite sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: A seller with this email already exists.
+          $ref: "#/components/responses/Conflict"
+
+  /api/sellers/invite/accept:
+    post:
+      tags: [Sellers]
+      summary: Accept a seller invite
+      security: []
+      description: |
+        Completes seller registration using the token from an invite email. The seller
+        account is created in PENDING state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [
+                  token,
+                  name,
+                  password,
+                  phone,
+                  businessName,
+                  businessType,
+                  address,
+                ]
+              properties:
+                token:
+                  type: string
+                name:
+                  type: string
+                  minLength: 2
+                password:
+                  type: string
+                  minLength: 8
+                phone:
+                  type: string
+                  pattern: '^\+?[6-9]\d{9}$'
+                businessName:
+                  type: string
+                businessType:
+                  $ref: "#/components/schemas/BusinessType"
+                address:
+                  $ref: "#/components/schemas/Address"
+      responses:
+        "201":
+          description: Seller account created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Invalid, already-used, or expired invite token.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/sellers/kyc:
+    post:
+      tags: [Sellers]
+      summary: Submit KYC
+      description: |
+        Submits KYC documents for the authenticated seller. Can only be submitted once.
+        The seller must be in an active (non-suspended, approved) state.
+
+        Required seller role: owner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [aadharNumber, panNumber]
+              properties:
+                aadharNumber:
+                  type: string
+                  pattern: '^\d{12}$'
+                  example: "123456789012"
+                panNumber:
+                  type: string
+                  pattern: "^[A-Z]{5}[0-9]{4}[A-Z]$"
+                  example: ABCDE1234F
+                gstNumber:
+                  type: string
+                  pattern: '^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}$'
+                  nullable: true
+                businessRegNumber:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: KYC submitted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/SellerKyc"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: KYC already submitted.
+          $ref: "#/components/responses/Conflict"
+
+  /api/sellers/bank:
+    post:
+      tags: [Sellers]
+      summary: Add bank details
+      description: "Required seller role: owner."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accountHolderName, accountNumber, ifscCode, bankName]
+              properties:
+                accountHolderName:
+                  type: string
+                accountNumber:
+                  type: string
+                  pattern: '^\d{9,18}$'
+                ifscCode:
+                  type: string
+                  pattern: "^[A-Z]{4}0[A-Z0-9]{6}$"
+                  example: SBIN0001234
+                bankName:
+                  type: string
+      responses:
+        "201":
+          description: Bank details saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/SellerBankDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Bank detail already added.
+          $ref: "#/components/responses/Conflict"
+    get:
+      tags: [Sellers]
+      summary: Get bank details
+      description: "Required seller role: owner."
+      responses:
+        "200":
+          description: Bank details.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/SellerBankDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/sellers/members:
+    post:
+      tags: [Sellers]
+      summary: Add a seller team member
+      description: |
+        Adds an existing platform user to the seller's team with the specified role.
+
+        Required seller role: owner or manager.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, roleId]
+              properties:
+                email:
+                  type: string
+                  format: email
+                roleId:
+                  type: string
+      responses:
+        "201":
+          description: Member added.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: User not found, role not found, or user already a member.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/sellers/members/{memberId}/role:
+    patch:
+      tags: [Sellers]
+      summary: Update a seller team member's role
+      description: "Required seller role: owner."
+      parameters:
+        - $ref: "#/components/parameters/memberId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roleId]
+              properties:
+                roleId:
+                  type: string
+      responses:
+        "200":
+          description: Member role updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/sellers/pending:
+    get:
+      tags: [Sellers]
+      summary: List pending sellers
+      description: "Required platform role: super_admin or onboarding_manager."
+      responses:
+        "200":
+          description: List of pending sellers.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Seller"
+
+  /api/sellers/all:
+    get:
+      tags: [Sellers]
+      summary: List all sellers
+      description: "Required platform role: super_admin or onboarding_manager."
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/SellerStatus"
+          description: Filter by seller status.
+      responses:
+        "200":
+          description: List of sellers.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Seller"
+
+  /api/sellers/kyc/pending:
+    get:
+      tags: [Sellers]
+      summary: List pending KYC submissions
+      description: "Required platform role: super_admin or onboarding_manager."
+      responses:
+        "200":
+          description: Sellers with pending KYC.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/sellers/{sellerId}:
+    get:
+      tags: [Sellers]
+      summary: Get seller by ID
+      description: "Required platform role: super_admin, onboarding_manager, or product_reviewer."
+      parameters:
+        - $ref: "#/components/parameters/sellerId"
+      responses:
+        "200":
+          description: Seller record.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Seller"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/sellers/{sellerId}/approve:
+    patch:
+      tags: [Sellers]
+      summary: Approve a seller
+      description: |
+        Transitions the seller from PENDING to APPROVED. A notification is sent to the seller.
+
+        "Required platform role: super_admin or onboarding_manager."
+      parameters:
+        - $ref: "#/components/parameters/sellerId"
+      responses:
+        "200":
+          description: Seller approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Seller not found or not in PENDING status.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/sellers/{sellerId}/reject:
+    patch:
+      tags: [Sellers]
+      summary: Reject a seller
+      description: "Required platform role: super_admin or onboarding_manager."
+      parameters:
+        - $ref: "#/components/parameters/sellerId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 5
+      responses:
+        "200":
+          description: Seller rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/sellers/{sellerId}/suspend:
+    patch:
+      tags: [Sellers]
+      summary: Suspend a seller
+      description: "Required platform role: super_admin."
+      parameters:
+        - $ref: "#/components/parameters/sellerId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 5
+      responses:
+        "200":
+          description: Seller suspended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/sellers/{sellerId}/kyc/verify:
+    patch:
+      tags: [Sellers]
+      summary: Verify a seller's KYC
+      description: "Required platform role: super_admin or onboarding_manager."
+      parameters:
+        - $ref: "#/components/parameters/sellerId"
+      responses:
+        "200":
+          description: KYC verified.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: KYC not found or already verified.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/sellers/{sellerId}/kyc/reject:
+    patch:
+      tags: [Sellers]
+      summary: Reject a seller's KYC
+      description: "Required platform role: super_admin or onboarding_manager."
+      parameters:
+        - $ref: "#/components/parameters/sellerId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 5
+      responses:
+        "200":
+          description: KYC rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/shops:
+    post:
+      tags: [Shops]
+      summary: Create a shop
+      description: |
+        Creates a new shop under the authenticated seller's account.
+        The seller must be in APPROVED status.
+
+        Required seller role: owner or manager.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - category
+                - contactEmail
+                - contactPhone
+                - pickupStreet
+                - pickupCity
+                - pickupState
+                - pickupPincode
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: Mehta Electronics
+                description:
+                  type: string
+                category:
+                  type: string
+                  example: Electronics
+                logo:
+                  type: string
+                  format: uri
+                banner:
+                  type: string
+                  format: uri
+                contactEmail:
+                  type: string
+                  format: email
+                contactPhone:
+                  type: string
+                  pattern: '^\+?[6-9]\d{9}$'
+                returnPolicy:
+                  type: string
+                pickupStreet:
+                  type: string
+                  minLength: 5
+                pickupCity:
+                  type: string
+                pickupState:
+                  type: string
+                pickupPincode:
+                  type: string
+                  pattern: '^\d{6}$'
+      responses:
+        "201":
+          description: Shop created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Shop"
+        "400":
+          description: Seller not found or not approved.
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    get:
+      tags: [Shops]
+      summary: List seller's shops
+      description: "Required seller role: owner, manager, or staff."
+      responses:
+        "200":
+          description: Shops belonging to the authenticated seller.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Shop"
+
+  /api/shops/{shopId}:
+    get:
+      tags: [Shops]
+      summary: Get a shop
+      description: "Required seller role: owner, manager, or staff."
+      parameters:
+        - $ref: "#/components/parameters/shopId"
+      responses:
+        "200":
+          description: Shop record.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Shop"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Shops]
+      summary: Update a shop
+      description: |
+        All fields are optional. Rejected shops cannot be updated.
+
+        Required seller role: owner or manager.
+      parameters:
+        - $ref: "#/components/parameters/shopId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                category:
+                  type: string
+                logo:
+                  type: string
+                  format: uri
+                banner:
+                  type: string
+                  format: uri
+                contactEmail:
+                  type: string
+                  format: email
+                contactPhone:
+                  type: string
+                returnPolicy:
+                  type: string
+                pickupStreet:
+                  type: string
+                pickupCity:
+                  type: string
+                pickupState:
+                  type: string
+                pickupPincode:
+                  type: string
+      responses:
+        "200":
+          description: Shop updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Shop"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/categories:
+    get:
+      tags: [Categories]
+      summary: List categories
+      security: []
+      description: Returns categories, optionally filtered to direct children of a parent.
+      parameters:
+        - name: parentId
+          in: query
+          schema:
+            type: string
+          description: Return only direct children of this category ID.
+      responses:
+        "200":
+          description: List of categories.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Category"
+    post:
+      tags: [Categories]
+      summary: Create a category
+      description: "Required platform role: super_admin."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: Mobile Phones
+                description:
+                  type: string
+                parentId:
+                  type: string
+                  description: Omit to create a root-level category.
+      responses:
+        "201":
+          description: Category created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Category"
+        "400":
+          description: Category already exists or parent not found.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/categories/tree:
+    get:
+      tags: [Categories]
+      summary: Get full category tree
+      security: []
+      description: Returns the complete hierarchical category tree.
+      responses:
+        "200":
+          description: Nested category tree.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/categories/{categoryId}:
+    get:
+      tags: [Categories]
+      summary: Get a category
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/categoryId"
+      responses:
+        "200":
+          description: Category record.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Category"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Categories]
+      summary: Update a category
+      description: "Required platform role: super_admin."
+      parameters:
+        - $ref: "#/components/parameters/categoryId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                parentId:
+                  type: string
+      responses:
+        "200":
+          description: Category updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Category"
+        "400":
+          description: Category not found, parent not found, or circular reference.
+          $ref: "#/components/responses/BadRequest"
+    delete:
+      tags: [Categories]
+      summary: Delete a category
+      description: |
+        Fails if the category has subcategories or associated products.
+
+        Required platform role: super_admin.
+      parameters:
+        - $ref: "#/components/parameters/categoryId"
+      responses:
+        "200":
+          description: Category deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageEnvelope"
+        "400":
+          description: Category not found, has subcategories, or has products.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/search:
+    get:
+      tags: [Products]
+      summary: Search products
+      security: []
+      description: Full-text and filtered product search. Open to the public.
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Search term.
+        - name: categoryId
+          in: query
+          schema:
+            type: string
+        - name: minPrice
+          in: query
+          schema:
+            type: number
+        - name: maxPrice
+          in: query
+          schema:
+            type: number
+        - name: sellerId
+          in: query
+          schema:
+            type: string
+        - name: shopId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/ApprovalStatus"
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Paginated product list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/products/bulk/template:
+    get:
+      tags: [Products]
+      summary: Download bulk upload template
+      security: []
+      description: Returns an XLSX template for bulk product creation.
+      responses:
+        "200":
+          description: XLSX file.
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+
+  /api/products/bulk:
+    post:
+      tags: [Products]
+      summary: Bulk upload products
+      description: |
+        Parses an XLSX file and creates multiple products in a single request.
+        Seller must have a verified KYC.
+
+        Required seller role: owner or manager.
+        Rate limit: upload limiter (20 per minute per seller).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: XLSX file. Max 10 MB.
+      responses:
+        "201":
+          description: Bulk upload processed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      created:
+                        type: integer
+                      failed:
+                        type: integer
+                      total:
+                        type: integer
+                      results:
+                        type: array
+                        items:
+                          type: object
+        "400":
+          description: Empty file, KYC not verified, or missing columns.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/pending:
+    get:
+      tags: [Products]
+      summary: List pending products
+      description: "Required platform role: super_admin or product_reviewer."
+      responses:
+        "200":
+          description: Products awaiting review.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Product"
+
+  /api/products:
+    post:
+      tags: [Products]
+      summary: Create a product
+      description: |
+        Seller KYC must be verified and the target shop must be approved.
+
+        Required seller role: owner or manager.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [shopId, name, categoryId]
+              properties:
+                shopId:
+                  type: string
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 200
+                description:
+                  type: string
+                price:
+                  type: number
+                  format: double
+                compareAtPrice:
+                  type: number
+                  format: double
+                sku:
+                  type: string
+                stock:
+                  type: integer
+                  minimum: 0
+                  default: 0
+                categoryId:
+                  type: string
+                weightGrams:
+                  type: integer
+                length:
+                  type: number
+                width:
+                  type: number
+                height:
+                  type: number
+                isDigital:
+                  type: boolean
+                  default: false
+      responses:
+        "201":
+          description: Product created with PENDING status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Product"
+        "400":
+          description: Shop not found, shop not approved, duplicate SKU, or KYC issues.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/shop/{shopId}:
+    get:
+      tags: [Products]
+      summary: List products in a shop
+      description: "Required seller role: owner, manager, or staff."
+      parameters:
+        - $ref: "#/components/parameters/shopId"
+      responses:
+        "200":
+          description: Products in the specified shop.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Product"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/products/{productId}:
+    get:
+      tags: [Products]
+      summary: Get a product
+      description: "Required seller role: owner, manager, or staff."
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      responses:
+        "200":
+          description: Product record.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Product"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Products]
+      summary: Update a product
+      description: |
+        Rejected products cannot be updated. All fields are optional.
+
+        Required seller role: owner or manager.
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                price:
+                  type: number
+                compareAtPrice:
+                  type: number
+                sku:
+                  type: string
+                stock:
+                  type: integer
+                categoryId:
+                  type: string
+                weightGrams:
+                  type: integer
+                isDigital:
+                  type: boolean
+      responses:
+        "200":
+          description: Product updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Product"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    delete:
+      tags: [Products]
+      summary: Delete a product
+      description: |
+        Approved products cannot be deleted.
+
+        Required seller role: owner.
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      responses:
+        "200":
+          description: Product deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/approve:
+    patch:
+      tags: [Products]
+      summary: Approve a product
+      description: "Required platform role: super_admin or product_reviewer."
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note:
+                  type: string
+      responses:
+        "200":
+          description: Product approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Product not found or not in PENDING status.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/reject:
+    patch:
+      tags: [Products]
+      summary: Reject a product
+      description: "Required platform role: super_admin or product_reviewer."
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 5
+      responses:
+        "200":
+          description: Product rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/images:
+    get:
+      tags: [Product Images]
+      summary: List product images
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      responses:
+        "200":
+          description: Ordered list of images.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProductImage"
+    post:
+      tags: [Product Images]
+      summary: Upload a product image
+      description: |
+        Accepts a single image file. Max file size 10 MB. Stored in object storage.
+
+        Required seller role: owner or manager.
+        Rate limit: upload limiter (20 per minute per seller).
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Image uploaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/ProductImage"
+        "400":
+          description: Product not found, invalid file type, or file too large.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/images/reorder:
+    patch:
+      tags: [Product Images]
+      summary: Reorder product images
+      description: "Required seller role: owner or manager."
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderedIds]
+              properties:
+                orderedIds:
+                  type: array
+                  items:
+                    type: string
+                  description: Image IDs in the desired display order.
+      responses:
+        "200":
+          description: Images reordered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/images/{imageId}:
+    delete:
+      tags: [Product Images]
+      summary: Delete a product image
+      description: "Required seller role: owner or manager."
+      parameters:
+        - $ref: "#/components/parameters/productId"
+        - $ref: "#/components/parameters/imageId"
+      responses:
+        "200":
+          description: Image deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageEnvelope"
+        "400":
+          description: Product or image not found.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/variants:
+    get:
+      tags: [Product Variants]
+      summary: List variant options
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      responses:
+        "200":
+          description: Variant options with their values.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/VariantOption"
+    post:
+      tags: [Product Variants]
+      summary: Create a variant option
+      description: |
+        Creates a variant option (e.g., "Color") with its initial values (e.g., ["Red", "Blue"]).
+        Approved products cannot have their variants modified.
+
+        Required seller role: owner or manager.
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, values]
+              properties:
+                name:
+                  type: string
+                  maxLength: 50
+                  example: Color
+                values:
+                  type: array
+                  items:
+                    type: string
+                  minItems: 1
+                  example: [Red, Blue, Green]
+      responses:
+        "201":
+          description: Variant option created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/VariantOption"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/variants/{optionId}/values:
+    post:
+      tags: [Product Variants]
+      summary: Add values to a variant option
+      description: "Required seller role: owner or manager."
+      parameters:
+        - $ref: "#/components/parameters/productId"
+        - $ref: "#/components/parameters/optionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [values]
+              properties:
+                values:
+                  type: array
+                  items:
+                    type: string
+                  minItems: 1
+      responses:
+        "200":
+          description: Values added.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/variants/{optionId}:
+    delete:
+      tags: [Product Variants]
+      summary: Delete a variant option
+      description: |
+        All SKUs must be deleted before removing a variant option.
+
+        Required seller role: owner or manager.
+      parameters:
+        - $ref: "#/components/parameters/productId"
+        - $ref: "#/components/parameters/optionId"
+      responses:
+        "200":
+          description: Variant option deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/variants/{optionId}/values/{valueId}:
+    delete:
+      tags: [Product Variants]
+      summary: Delete a variant value
+      description: |
+        Cannot delete a value that is in use by existing SKUs.
+
+        Required seller role: owner or manager.
+      parameters:
+        - $ref: "#/components/parameters/productId"
+        - $ref: "#/components/parameters/optionId"
+        - $ref: "#/components/parameters/valueId"
+      responses:
+        "200":
+          description: Variant value deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/skus:
+    get:
+      tags: [Product Variants]
+      summary: List SKUs
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      responses:
+        "200":
+          description: All SKUs for the product.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProductSKU"
+    post:
+      tags: [Product Variants]
+      summary: Create a SKU
+      description: |
+        The options map must reference existing variant option names and values.
+        SKU codes must be unique across the platform.
+
+        Required seller role: owner or manager.
+      parameters:
+        - $ref: "#/components/parameters/productId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sku, price, stock, options]
+              properties:
+                sku:
+                  type: string
+                  maxLength: 100
+                  example: SKU-WBH-RED-L
+                price:
+                  type: number
+                  format: double
+                  example: 1299.00
+                stock:
+                  type: integer
+                  minimum: 0
+                  example: 50
+                minQuantity:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                options:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  example:
+                    Color: Red
+                    Size: L
+      responses:
+        "201":
+          description: SKU created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/ProductSKU"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/products/{productId}/skus/{skuId}:
+    get:
+      tags: [Product Variants]
+      summary: Get a SKU
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/productId"
+        - $ref: "#/components/parameters/skuId"
+      responses:
+        "200":
+          description: SKU record.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/ProductSKU"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Product Variants]
+      summary: Update a SKU
+      description: "Required seller role: owner or manager."
+      parameters:
+        - $ref: "#/components/parameters/productId"
+        - $ref: "#/components/parameters/skuId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                price:
+                  type: number
+                  format: double
+                stock:
+                  type: integer
+                  minimum: 0
+                minQuantity:
+                  type: integer
+                  minimum: 1
+      responses:
+        "200":
+          description: SKU updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    delete:
+      tags: [Product Variants]
+      summary: Delete a SKU
+      description: |
+        Cannot delete a SKU that is referenced by existing orders.
+
+        Required seller role: owner or manager.
+      parameters:
+        - $ref: "#/components/parameters/productId"
+        - $ref: "#/components/parameters/skuId"
+      responses:
+        "200":
+          description: SKU deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/orders:
+    post:
+      tags: [Orders]
+      summary: Create an order
+      description: |
+        Creates a new order for the authenticated customer. SAMPLE orders are limited
+        to 2 line items. All products must be in APPROVED status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sellerId, type, items, deliveryAddress]
+              properties:
+                sellerId:
+                  type: string
+                type:
+                  type: string
+                  enum: [STANDARD, SAMPLE]
+                items:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [productId, quantity]
+                    properties:
+                      productId:
+                        type: string
+                      quantity:
+                        type: integer
+                        minimum: 1
+                deliveryAddress:
+                  $ref: "#/components/schemas/DeliveryAddress"
+      responses:
+        "201":
+          description: Order created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Order"
+        "400":
+          description: Products not found/approved, or sample order limit exceeded.
+          $ref: "#/components/responses/BadRequest"
+    get:
+      tags: [Orders]
+      summary: List seller's orders
+      description: |
+        Returns all orders for the authenticated seller's tenant, optionally filtered by status.
+
+        Required seller role: owner, manager, or staff.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/OrderStatus"
+      responses:
+        "200":
+          description: Orders.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Order"
+
+  /api/orders/bulk:
+    post:
+      tags: [Orders]
+      summary: Create a bulk order
+      description: |
+        Creates a BULK order from an XLSX file containing delivery addresses. The file
+        is parsed asynchronously and addresses are assigned to shops by proximity.
+
+        Rate limit: upload limiter (20 per minute).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, sellerId, items]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: XLSX file with delivery addresses.
+                sellerId:
+                  type: string
+                items:
+                  type: string
+                  description: JSON-stringified array of order items.
+      responses:
+        "201":
+          description: Bulk order created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Missing file, empty file, or invalid products.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/orders/{orderId}:
+    get:
+      tags: [Orders]
+      summary: Get an order
+      parameters:
+        - $ref: "#/components/parameters/orderId"
+      responses:
+        "200":
+          description: Order with items, addresses, negotiations, payments, and shipments.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Order"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/orders/{orderId}/negotiate:
+    post:
+      tags: [Orders]
+      summary: Submit a negotiation proposal
+      description: |
+        Either the seller or the customer can submit a price proposal. The order must
+        be in NEGOTIATING status.
+      parameters:
+        - $ref: "#/components/parameters/orderId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [proposedPrice]
+              properties:
+                proposedPrice:
+                  type: number
+                  format: double
+                  minimum: 0.01
+                note:
+                  type: string
+                meetLink:
+                  type: string
+                  format: uri
+      responses:
+        "201":
+          description: Proposal submitted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/OrderNegotiation"
+        "400":
+          description: Order not found or not in NEGOTIATING status.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/orders/{orderId}/negotiate/{negotiationId}:
+    patch:
+      tags: [Orders]
+      summary: Respond to a negotiation proposal
+      parameters:
+        - $ref: "#/components/parameters/orderId"
+        - $ref: "#/components/parameters/negotiationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [ACCEPT, REJECT, COUNTER]
+                counterPrice:
+                  type: number
+                  format: double
+                  description: Required when action is COUNTER.
+                note:
+                  type: string
+      responses:
+        "200":
+          description: Response recorded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Negotiation not found, already responded to, or order not found.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/orders/{orderId}/addresses/{addressId}/assign:
+    patch:
+      tags: [Orders]
+      summary: Assign a shop to a delivery address
+      description: |
+        Assigns a specific seller shop to fulfill a delivery address on a bulk order.
+
+        Required seller role: owner, manager, or staff.
+      parameters:
+        - $ref: "#/components/parameters/orderId"
+        - $ref: "#/components/parameters/addressId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [shopId]
+              properties:
+                shopId:
+                  type: string
+      responses:
+        "200":
+          description: Shop assigned to address.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Address, shop not found, or shop not approved.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/orders/threshold:
+    post:
+      tags: [Orders]
+      summary: Set order threshold
+      description: |
+        Sets the minimum order amount threshold for the seller, optionally scoped
+        to a product category.
+
+        Required seller role: owner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                productCategory:
+                  type: string
+                  description: Omit to set a global threshold.
+                amount:
+                  type: number
+                  format: double
+                  minimum: 0.01
+      responses:
+        "200":
+          description: Threshold set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/orders/commission:
+    post:
+      tags: [Orders]
+      summary: Set product commission rate
+      description: |
+        Sets the platform commission rate for a specific product or category.
+        Either productId or category must be provided, not both.
+
+        Required platform role: super_admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rate]
+              properties:
+                productId:
+                  type: string
+                category:
+                  type: string
+                rate:
+                  type: number
+                  format: double
+                  minimum: 0
+                  maximum: 100
+                  description: Commission percentage (0.00 to 100.00).
+      responses:
+        "201":
+          description: Commission rate set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Neither productId nor category provided.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/payments/orders/{orderId}/advance:
+    post:
+      tags: [Payments]
+      summary: Create advance payment
+      description: |
+        Creates a Razorpay order for the advance payment on a confirmed order.
+        Advance payment can only be initiated once.
+
+        Rate limit: payment limiter (30 per minute per IP).
+      parameters:
+        - $ref: "#/components/parameters/orderId"
+      responses:
+        "201":
+          description: Razorpay order created. Pass razorpayOrderId to the Razorpay SDK.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Payment"
+        "400":
+          description: Order not found, not in payable state, or advance already initiated.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/payments/orders/{orderId}/final:
+    post:
+      tags: [Payments]
+      summary: Create final payment
+      description: |
+        Creates a Razorpay order for the final payment. Advance payment must be
+        fully completed before this can be initiated.
+
+        Rate limit: payment limiter (30 per minute per IP).
+      parameters:
+        - $ref: "#/components/parameters/orderId"
+      responses:
+        "201":
+          description: Razorpay order created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Payment"
+        "400":
+          description: Order not found, advance not completed, or final already initiated.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/payments/verify:
+    post:
+      tags: [Payments]
+      summary: Verify and capture a payment
+      description: |
+        Verifies the Razorpay signature and marks the payment as captured. Call this
+        immediately after the user completes payment in the Razorpay SDK.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [razorpayOrderId, razorpayPaymentId, razorpaySignature]
+              properties:
+                razorpayOrderId:
+                  type: string
+                  example: order_1234abcd
+                razorpayPaymentId:
+                  type: string
+                  example: pay_1234abcd
+                razorpaySignature:
+                  type: string
+                  description: HMAC-SHA256 signature from the Razorpay SDK callback.
+      responses:
+        "200":
+          description: Payment verified and captured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Invalid payment signature.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/payments/orders/{orderId}/refund:
+    post:
+      tags: [Payments]
+      summary: Initiate a refund
+      description: The order must be cancelled before a refund can be initiated.
+      parameters:
+        - $ref: "#/components/parameters/orderId"
+      responses:
+        "200":
+          description: Refund initiated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Order not found, not cancelled, or no payments to refund.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/payments/orders/{orderId}:
+    get:
+      tags: [Payments]
+      summary: Get payments for an order
+      parameters:
+        - $ref: "#/components/parameters/orderId"
+      responses:
+        "200":
+          description: All payment records for the order.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Payment"
+
+  /api/payments/webhook:
+    post:
+      tags: [Payments]
+      summary: Razorpay payment webhook
+      security: []
+      description: |
+        Endpoint for Razorpay to POST payment events. Validates the
+        X-Razorpay-Signature header before processing. Register this URL in the
+        Razorpay dashboard under webhook settings.
+      parameters:
+        - name: X-Razorpay-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook processed.
+        "400":
+          description: Missing or invalid signature.
+
+  /api/shipments:
+    get:
+      tags: [Shipments]
+      summary: List shipments
+      description: "Returns all shipments for the authenticated seller. Required seller role: owner, manager, or staff."
+      responses:
+        "200":
+          description: Shipments.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Shipment"
+    post:
+      tags: [Shipments]
+      summary: Create a shipment
+      description: |
+        Books a Shiprocket shipment for a confirmed order.
+
+        Required seller role: owner or manager.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId, shopId]
+              properties:
+                orderId:
+                  type: string
+                shopId:
+                  type: string
+                orderAddressId:
+                  type: string
+                  description: Required for bulk orders where each address ships independently.
+      responses:
+        "201":
+          description: Shipment booked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/Shipment"
+        "400":
+          description: Order not found, not confirmed, shop not found, or address not found.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/shipments/serviceability:
+    get:
+      tags: [Shipments]
+      summary: Check serviceability
+      description: |
+        Checks Shiprocket courier serviceability between two pincodes.
+
+        Required seller role: owner, manager, or staff.
+      parameters:
+        - name: pickupPincode
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: deliveryPincode
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: weightKg
+          in: query
+          required: true
+          schema:
+            type: number
+        - name: cod
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Serviceability results with available courier options.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Missing required query parameters.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/shipments/{shipmentId}/track:
+    get:
+      tags: [Shipments]
+      summary: Track a shipment
+      description: "Required seller role: owner, manager, or staff."
+      parameters:
+        - $ref: "#/components/parameters/shipmentId"
+      responses:
+        "200":
+          description: Tracking information from Shiprocket.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Shipment not found or no tracking ID available yet.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/shipments/{shipmentId}/cancel:
+    patch:
+      tags: [Shipments]
+      summary: Cancel a shipment
+      description: |
+        Cannot cancel a shipment that has already been delivered.
+
+        Required seller role: owner or manager.
+      parameters:
+        - $ref: "#/components/parameters/shipmentId"
+      responses:
+        "200":
+          description: Shipment cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Shipment not found or already delivered.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/shipments/webhook:
+    post:
+      tags: [Shipments]
+      summary: Shiprocket shipment webhook
+      security: []
+      description: |
+        Endpoint for Shiprocket to POST tracking status updates. Validates the
+        X-Shiprocket-Signature header before processing.
+      parameters:
+        - name: X-Shiprocket-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook processed.
+        "400":
+          description: Missing or invalid signature.
+
+  /api/returns:
+    post:
+      tags: [Returns]
+      summary: Create a return request
+      description: |
+        Customer submits a return request for a delivered order. Only one return
+        request is allowed per order.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId, reason]
+              properties:
+                orderId:
+                  type: string
+                reason:
+                  type: string
+                  minLength: 10
+      responses:
+        "201":
+          description: Return request created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/ReturnRequest"
+        "400":
+          description: Order not found, not delivered, or return already exists.
+          $ref: "#/components/responses/BadRequest"
+    get:
+      tags: [Returns]
+      summary: List return requests for seller
+      description: "Required seller role: owner, manager, or staff."
+      responses:
+        "200":
+          description: Return requests.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ReturnRequest"
+
+  /api/returns/my:
+    get:
+      tags: [Returns]
+      summary: List customer's own return requests
+      responses:
+        "200":
+          description: Return requests by the authenticated customer.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ReturnRequest"
+
+  /api/returns/{returnId}:
+    get:
+      tags: [Returns]
+      summary: Get a return request
+      description: "Required seller role: owner, manager, or staff."
+      parameters:
+        - $ref: "#/components/parameters/returnId"
+      responses:
+        "200":
+          description: Return request record.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/ReturnRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/returns/{returnId}/approve:
+    patch:
+      tags: [Returns]
+      summary: Approve a return request
+      description: |
+        Approves the return and initiates a return shipment via Shiprocket.
+
+        Required seller role: owner or manager.
+      parameters:
+        - $ref: "#/components/parameters/returnId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note:
+                  type: string
+      responses:
+        "200":
+          description: Return approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Return not found, not pending, or shop/address not found.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/returns/{returnId}/reject:
+    patch:
+      tags: [Returns]
+      summary: Reject a return request
+      description: "Required seller role: owner or manager."
+      parameters:
+        - $ref: "#/components/parameters/returnId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [note]
+              properties:
+                note:
+                  type: string
+                  minLength: 5
+      responses:
+        "200":
+          description: Return rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Return not found or not pending.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/payouts/me:
+    get:
+      tags: [Payouts]
+      summary: Get own payout summary
+      description: Returns the payout summary for the authenticated seller.
+      responses:
+        "200":
+          description: Payout summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/payouts/config:
+    post:
+      tags: [Payouts]
+      summary: Set platform configuration
+      description: |
+        Sets a key-value platform configuration entry (e.g., commission rates,
+        feature flags).
+
+        Required platform role: super_admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              properties:
+                key:
+                  type: string
+                  example: default_commission_rate
+                value:
+                  type: string
+                  example: "5.00"
+      responses:
+        "200":
+          description: Configuration saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/payouts/sellers:
+    get:
+      tags: [Payouts]
+      summary: List all sellers' payout summaries
+      description: "Required platform role: super_admin or onboarding_manager."
+      responses:
+        "200":
+          description: Payout summaries for all sellers.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/payouts/sellers/{sellerId}:
+    get:
+      tags: [Payouts]
+      summary: Get a seller's payout summary
+      description: "Required platform role: super_admin or onboarding_manager."
+      parameters:
+        - $ref: "#/components/parameters/sellerId"
+      responses:
+        "200":
+          description: Seller payout summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/payouts/sellers/{sellerId}/initiate:
+    post:
+      tags: [Payouts]
+      summary: Initiate a payout
+      description: |
+        Triggers a Razorpay payout to the seller's registered bank account or UPI.
+        All unpaid confirmed orders for the seller are included.
+
+        Required platform role: super_admin.
+        Rate limit: payment limiter (30 per minute per IP).
+      parameters:
+        - $ref: "#/components/parameters/sellerId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [method]
+              properties:
+                method:
+                  $ref: "#/components/schemas/PayoutMethod"
+                note:
+                  type: string
+                periodStart:
+                  type: string
+                  format: date-time
+                periodEnd:
+                  type: string
+                  format: date-time
+      responses:
+        "201":
+          description: Payout initiated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/SellerPayout"
+        "400":
+          description: Seller not found, bank details missing, no unpaid orders, or zero net amount.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/payouts/history:
+    get:
+      tags: [Payouts]
+      summary: Get platform-wide payout history
+      description: "Required platform role: super_admin or onboarding_manager."
+      responses:
+        "200":
+          description: All payout records.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SellerPayout"
+
+  /api/payouts/history/{sellerId}:
+    get:
+      tags: [Payouts]
+      summary: Get payout history for a seller
+      description: "Required platform role: super_admin or onboarding_manager."
+      parameters:
+        - $ref: "#/components/parameters/sellerId"
+      responses:
+        "200":
+          description: Payout records for the seller.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SellerPayout"
+
+  /api/payouts/{payoutId}:
+    get:
+      tags: [Payouts]
+      summary: Get a payout by ID
+      description: "Required platform role: super_admin or onboarding_manager."
+      parameters:
+        - $ref: "#/components/parameters/payoutId"
+      responses:
+        "200":
+          description: Payout record.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/SellerPayout"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/payouts/webhook:
+    post:
+      tags: [Payouts]
+      summary: Razorpay payout webhook
+      security: []
+      description: |
+        Endpoint for Razorpay to POST payout status events. Validates the
+        X-Razorpay-Signature header before processing.
+      parameters:
+        - name: X-Razorpay-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook processed.
+        "400":
+          description: Missing or invalid signature.
+
+  /api/analytics/seller:
+    get:
+      tags: [Analytics]
+      summary: Seller analytics overview
+      description: |
+        Returns aggregated order stats, revenue, and product metrics for the
+        authenticated seller over the requested period.
+
+        Required seller role: owner or manager.
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d]
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Start of a custom date range. Requires `to`.
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: End of a custom date range. Requires `from`.
+      responses:
+        "200":
+          description: Seller analytics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/analytics/seller/revenue:
+    get:
+      tags: [Analytics]
+      summary: Seller daily revenue
+      description: "Required seller role: owner or manager."
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d]
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Daily revenue time series.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/analytics/seller/products:
+    get:
+      tags: [Analytics]
+      summary: Seller top products
+      description: "Required seller role: owner or manager."
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        "200":
+          description: Top products by revenue or volume.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/analytics/seller/returns:
+    get:
+      tags: [Analytics]
+      summary: Seller return rate
+      description: "Required seller role: owner or manager."
+      responses:
+        "200":
+          description: Return rate metrics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/analytics/platform:
+    get:
+      tags: [Analytics]
+      summary: Platform analytics overview
+      description: "Required platform role: super_admin or onboarding_manager."
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d]
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Platform-wide analytics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/analytics/platform/sellers:
+    get:
+      tags: [Analytics]
+      summary: Top sellers
+      description: "Required platform role: super_admin or onboarding_manager."
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        "200":
+          description: Top sellers by revenue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/analytics/refresh:
+    post:
+      tags: [Analytics]
+      summary: Refresh all materialized views
+      description: "Required platform role: super_admin."
+      responses:
+        "200":
+          description: All views refreshed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/analytics/refresh/{viewName}:
+    post:
+      tags: [Analytics]
+      summary: Refresh a specific materialized view
+      description: "Required platform role: super_admin."
+      parameters:
+        - $ref: "#/components/parameters/viewName"
+      responses:
+        "200":
+          description: View refreshed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Unknown view name.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/notifications:
+    get:
+      tags: [Notifications]
+      summary: Get notifications
+      description: Returns paginated notifications for the authenticated user.
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Paginated notifications.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      notifications:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Notification"
+                      total:
+                        type: integer
+                      unread:
+                        type: integer
+
+  /api/notifications/stream:
+    get:
+      tags: [Notifications]
+      summary: Subscribe to real-time notifications (SSE)
+      description: |
+        Opens a Server-Sent Events stream for the authenticated user. The client
+        receives new notification events as they are published, without polling.
+
+        Set the request Accept header to `text/event-stream`. Reconnect on
+        connection close using the standard EventSource API.
+
+        Each event has the format:
+        `data: { "type": "NOTIFICATION_TYPE", "title": "...", "message": "...", "data": {} }`
+      responses:
+        "200":
+          description: SSE stream opened.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /api/notifications/read:
+    patch:
+      tags: [Notifications]
+      summary: Mark specific notifications as read
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                  minItems: 1
+      responses:
+        "200":
+          description: Notifications marked as read.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/notifications/read-all:
+    patch:
+      tags: [Notifications]
+      summary: Mark all notifications as read
+      responses:
+        "200":
+          description: All notifications marked as read.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+
+  /api/platform/roles:
+    get:
+      tags: [Platform]
+      summary: List platform roles
+      description: "Required platform role: super_admin."
+      responses:
+        "200":
+          description: Platform roles.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PlatformRole"
+    post:
+      tags: [Platform]
+      summary: Create a platform role
+      description: "Required platform role: super_admin."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 50
+                  example: support_agent
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Role created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/PlatformRole"
+        "409":
+          description: Role already exists.
+          $ref: "#/components/responses/Conflict"
+
+  /api/platform/roles/{roleId}:
+    patch:
+      tags: [Platform]
+      summary: Update a platform role
+      description: "Protected roles cannot be renamed. Required platform role: super_admin."
+      parameters:
+        - $ref: "#/components/parameters/roleId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "200":
+          description: Role updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Role not found or protected role rename attempted.
+          $ref: "#/components/responses/BadRequest"
+    delete:
+      tags: [Platform]
+      summary: Delete a platform role
+      description: |
+        Cannot delete a protected role or a role with active members.
+
+        Required platform role: super_admin.
+      parameters:
+        - $ref: "#/components/parameters/roleId"
+      responses:
+        "200":
+          description: Role deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageEnvelope"
+        "400":
+          description: Role not found, protected, or has members.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/platform/members:
+    get:
+      tags: [Platform]
+      summary: List platform members
+      description: "Required platform role: super_admin."
+      responses:
+        "200":
+          description: Platform members.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PlatformMember"
+    post:
+      tags: [Platform]
+      summary: Add a platform member
+      description: |
+        Grants an existing user a platform role. The user must already have an account.
+
+        Required platform role: super_admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, roleId]
+              properties:
+                email:
+                  type: string
+                  format: email
+                roleId:
+                  type: string
+      responses:
+        "201":
+          description: Member added.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: User not found, role not found, or user already a member.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/platform/members/{memberId}/role:
+    patch:
+      tags: [Platform]
+      summary: Update a platform member's role
+      description: "Required platform role: super_admin."
+      parameters:
+        - $ref: "#/components/parameters/memberId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roleId]
+              properties:
+                roleId:
+                  type: string
+      responses:
+        "200":
+          description: Member role updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/platform/members/{memberId}:
+    delete:
+      tags: [Platform]
+      summary: Remove a platform member
+      description: |
+        The last super_admin cannot be removed.
+
+        Required platform role: super_admin.
+      parameters:
+        - $ref: "#/components/parameters/memberId"
+      responses:
+        "200":
+          description: Member removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageEnvelope"
+        "400":
+          description: Member not found or last super_admin removal attempted.
+          $ref: "#/components/responses/BadRequest"
+
+  /api/platform/audit-logs:
+    get:
+      tags: [Platform]
+      summary: Get audit logs
+      description: "Required platform role: super_admin, onboarding_manager, or product_reviewer."
+      parameters:
+        - name: sellerId
+          in: query
+          schema:
+            type: string
+        - name: actorId
+          in: query
+          schema:
+            type: string
+        - name: action
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audit log entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditLog"

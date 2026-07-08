@@ -1,0 +1,258 @@
+import { db } from "../../db/index";
+
+export const productVariantService = {
+  async createVariant(
+    sellerId: string,
+    productId: string,
+    data: { name: string; values: string[] },
+  ) {
+    const product = await db.product.findFirst({
+      where: { id: productId, sellerId },
+    });
+    if (!product) throw new Error("Product not found");
+    if (product.status === "APPROVED")
+      throw new Error("Cannot modify approved product variants");
+
+    const existing = await db.variantOption.findUnique({
+      where: { productId_name: { productId, name: data.name } },
+    });
+    if (existing)
+      throw new Error(`Variant option "${data.name}" already exists`);
+
+    return db.variantOption.create({
+      data: {
+        productId,
+        name: data.name,
+        values: {
+          create: data.values.map((value) => ({ value })),
+        },
+      },
+      include: { values: true },
+    });
+  },
+
+  async addVariantValues(
+    sellerId: string,
+    productId: string,
+    optionId: string,
+    values: string[],
+  ) {
+    const product = await db.product.findFirst({
+      where: { id: productId, sellerId },
+    });
+    if (!product) throw new Error("Product not found");
+
+    const option = await db.variantOption.findFirst({
+      where: { id: optionId, productId },
+    });
+    if (!option) throw new Error("Variant option not found");
+
+    const existing = await db.variantOptionValue.findMany({
+      where: { optionId },
+    });
+    const existingValues = new Set(existing.map((v) => v.value));
+    const newValues = values.filter((v) => !existingValues.has(v));
+
+    if (!newValues.length) throw new Error("All values already exist");
+
+    await db.variantOptionValue.createMany({
+      data: newValues.map((value) => ({ optionId, value })),
+    });
+
+    return db.variantOption.findUnique({
+      where: { id: optionId },
+      include: { values: true },
+    });
+  },
+
+  async deleteVariant(sellerId: string, productId: string, optionId: string) {
+    const product = await db.product.findFirst({
+      where: { id: productId, sellerId },
+    });
+    if (!product) throw new Error("Product not found");
+
+    const option = await db.variantOption.findFirst({
+      where: { id: optionId, productId },
+    });
+    if (!option) throw new Error("Variant option not found");
+
+    const skuCount = await db.productSKU.count({ where: { productId } });
+    if (skuCount > 0)
+      throw new Error("Delete all SKUs before removing variant options");
+
+    await db.variantOption.delete({ where: { id: optionId } });
+  },
+
+  async deleteVariantValue(
+    sellerId: string,
+    productId: string,
+    optionId: string,
+    valueId: string,
+  ) {
+    const product = await db.product.findFirst({
+      where: { id: productId, sellerId },
+    });
+    if (!product) throw new Error("Product not found");
+
+    const value = await db.variantOptionValue.findFirst({
+      where: { id: valueId, optionId },
+    });
+    if (!value) throw new Error("Variant value not found");
+
+    const skus = await db.productSKU.findMany({ where: { productId } });
+    const inUse = skus.some((sku) => {
+      const opts = sku.options as Record<string, string>;
+      return Object.values(opts).includes(value.value);
+    });
+    if (inUse)
+      throw new Error(
+        "Variant value is used by existing SKUs  delete SKUs first",
+      );
+
+    await db.variantOptionValue.delete({ where: { id: valueId } });
+  },
+
+  async listVariants(productId: string) {
+    return db.variantOption.findMany({
+      where: { productId },
+      include: { values: { orderBy: { value: "asc" } } },
+      orderBy: { name: "asc" },
+    });
+  },
+
+  async createSKU(
+    sellerId: string,
+    productId: string,
+    data: {
+      sku: string;
+      price: number;
+      stock: number;
+      minQuantity?: number;
+      options: Record<string, string>;
+    },
+  ) {
+    const product = await db.product.findFirst({
+      where: { id: productId, sellerId },
+      include: { variants: { include: { values: true } } },
+    });
+    if (!product) throw new Error("Product not found");
+
+    await validateSkuOptions(product.variants, data.options);
+
+    const existing = await db.productSKU.findUnique({
+      where: { sku: data.sku },
+    });
+    if (existing) throw new Error("SKU code already exists");
+
+    const allSkus = await db.productSKU.findMany({ where: { productId } });
+    const isDuplicate = allSkus.some((s) => {
+      const opts = s.options as Record<string, string>;
+      return (
+        JSON.stringify(sortObject(opts)) ===
+        JSON.stringify(sortObject(data.options))
+      );
+    });
+    if (isDuplicate)
+      throw new Error("A SKU with this option combination already exists");
+
+    return db.productSKU.create({
+      data: {
+        productId,
+        sku: data.sku,
+        price: data.price,
+        stock: data.stock,
+        minQuantity: data.minQuantity ?? 1,
+        options: data.options,
+      },
+    });
+  },
+
+  async updateSKU(
+    sellerId: string,
+    productId: string,
+    skuId: string,
+    data: Partial<{ price: number; stock: number; minQuantity: number }>,
+  ) {
+    const product = await db.product.findFirst({
+      where: { id: productId, sellerId },
+    });
+    if (!product) throw new Error("Product not found");
+
+    const sku = await db.productSKU.findFirst({
+      where: { id: skuId, productId },
+    });
+    if (!sku) throw new Error("SKU not found");
+
+    return db.productSKU.update({ where: { id: skuId }, data });
+  },
+
+  async deleteSKU(sellerId: string, productId: string, skuId: string) {
+    const product = await db.product.findFirst({
+      where: { id: productId, sellerId },
+    });
+    if (!product) throw new Error("Product not found");
+
+    const sku = await db.productSKU.findFirst({
+      where: { id: skuId, productId },
+    });
+    if (!sku) throw new Error("SKU not found");
+
+    const inUse = await db.orderItem.findFirst({ where: { skuId } });
+    if (inUse)
+      throw new Error("SKU is referenced by existing orders  cannot delete");
+
+    await db.productSKU.delete({ where: { id: skuId } });
+  },
+
+  async listSKUs(productId: string) {
+    return db.productSKU.findMany({
+      where: { productId },
+      orderBy: { createdAt: "asc" },
+    });
+  },
+
+  async getSKU(productId: string, skuId: string) {
+    const sku = await db.productSKU.findFirst({
+      where: { id: skuId, productId },
+    });
+    if (!sku) throw new Error("SKU not found");
+    return sku;
+  },
+};
+
+type VariantWithValues = {
+  name: string;
+  values: { value: string }[];
+};
+
+async function validateSkuOptions(
+  variants: VariantWithValues[],
+  options: Record<string, string>,
+): Promise<void> {
+  if (!variants.length)
+    throw new Error("Product has no variant options defined");
+
+  const variantMap = new Map(
+    variants.map((v) => [v.name, new Set(v.values.map((val) => val.value))]),
+  );
+
+  for (const [key, value] of Object.entries(options)) {
+    const validValues = variantMap.get(key);
+    if (!validValues) throw new Error(`Invalid variant option: "${key}"`);
+    if (!validValues.has(value)) {
+      throw new Error(`Invalid value "${value}" for option "${key}"`);
+    }
+  }
+
+  for (const variantName of variantMap.keys()) {
+    if (!(variantName in options)) {
+      throw new Error(`Missing option "${variantName}" in SKU`);
+    }
+  }
+}
+
+function sortObject(obj: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(obj).sort(([a], [b]) => a.localeCompare(b)),
+  );
+}

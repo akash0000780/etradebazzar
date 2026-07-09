@@ -7,9 +7,7 @@ import {
   seedPlatformPermissions,
   assignDefaultRolePermissions,
 } from "../lib/permission/permission.service";
-
-const SELLER_USER_ID = "cmqdgjkh2000082cpd2t7ftmy";
-const ADMIN_USER_ID = "cmqjidwu0000368cp6dk39ad7";
+import { redis, RedisKeys } from "../db/redis";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const randomDate = (start: Date, end: Date) =>
@@ -251,6 +249,47 @@ const productNames: Record<string, string[]> = {
   ],
 };
 
+// ── Fix Permissions ────────────────────────────────────────────────────────
+async function fixSellerPermissions() {
+  logger.info("Fixing seller role permissions...");
+
+  const sellers = await db.seller.findMany({
+    select: {
+      id: true,
+      roles: { select: { id: true, name: true } },
+    },
+  });
+
+  let fixed = 0;
+  for (const seller of sellers) {
+    const roles = seller.roles.map((r) => ({ id: r.id, name: r.name }));
+    if (roles.length === 0) continue;
+
+    const existingPerms = await db.rolePermission.findFirst({
+      where: { roleId: { in: roles.map((r) => r.id) } },
+    });
+
+    if (existingPerms) continue;
+
+    await db.$transaction(async (tx) => {
+      await assignDefaultRolePermissions(tx, roles);
+    });
+
+    const members = await db.sellerMember.findMany({
+      where: { sellerId: seller.id },
+      select: { userId: true },
+    });
+    for (const member of members) {
+      await redis.del(RedisKeys.userPermissions(member.userId, seller.id));
+      await redis.del(RedisKeys.userRoles(member.userId, seller.id));
+    }
+
+    fixed++;
+  }
+
+  logger.info(`Permissions fixed for ${fixed} sellers.`);
+}
+
 // ── Seed ───────────────────────────────────────────────────────────────────
 async function seedComprehensive() {
   logger.info("Starting comprehensive seed...");
@@ -295,7 +334,6 @@ async function seedComprehensive() {
       where: { email: "admin@etradebazaar.com" },
       update: {},
       create: {
-        id: ADMIN_USER_ID,
         name: "Super Admin",
         email: "admin@etradebazaar.com",
         password: adminPwd,
@@ -359,6 +397,17 @@ async function seedComprehensive() {
       ),
     );
 
+    // ── Idempotency check ─────────────────────────────────────────────────
+    const existingSellers = await db.seller.findFirst();
+    if (existingSellers) {
+      logger.info(
+        "Comprehensive data already exists, skipping data creation...",
+      );
+      await fixSellerPermissions();
+      logger.info("✅ Seed completed (permission fix only)!");
+      return;
+    }
+
     // ── 4. Sellers ─────────────────────────────────────────────────────────
     logger.info("Seeding sellers...");
     const sellerPwd = await bcrypt.hash("Seller@123", 12);
@@ -367,7 +416,6 @@ async function seedComprehensive() {
       where: { email: "akash.seller@example.com" },
       update: {},
       create: {
-        id: SELLER_USER_ID,
         name: "Akash Sharma",
         email: "akash.seller@example.com",
         password: sellerPwd,
@@ -535,7 +583,7 @@ async function seedComprehensive() {
           businessRegNumber: `U${randomInt(10000, 99999)}MH2024PTC${randomInt(100000, 999999)}`,
           status: "VERIFIED",
           verifiedAt: randomDate(new Date("2024-01-01"), new Date()),
-          verifiedBy: ADMIN_USER_ID,
+          verifiedBy: adminUser.id,
           aadhaarStatus: "VERIFIED",
           govtIdType: "PAN",
           govtIdNumber: `ABCDE${randomInt(1000, 9999)}F`,
@@ -646,7 +694,7 @@ async function seedComprehensive() {
             latitude: randomDecimal(18.0, 28.0),
             longitude: randomDecimal(72.0, 88.0),
             status: "APPROVED",
-            reviewedBy: ADMIN_USER_ID,
+            reviewedBy: adminUser.id,
             reviewedAt: randomDate(new Date("2024-01-01"), new Date()),
           },
         });
@@ -679,7 +727,7 @@ async function seedComprehensive() {
         data: {
           category: cat.name,
           rate: randomDecimal(3, 12),
-          setBy: ADMIN_USER_ID,
+          setBy: adminUser.id,
         },
       });
     }
@@ -717,7 +765,7 @@ async function seedComprehensive() {
             height: randomDecimal(2, 30),
             isDigital: false,
             status: "APPROVED",
-            reviewedBy: ADMIN_USER_ID,
+            reviewedBy: adminUser.id,
             reviewedAt: randomDate(new Date("2024-01-01"), new Date()),
           },
         });
@@ -769,7 +817,7 @@ async function seedComprehensive() {
           data: {
             productId: product.id,
             rate: randomDecimal(3, 10),
-            setBy: ADMIN_USER_ID,
+            setBy: adminUser.id,
           },
         });
         products.push(product);
@@ -914,7 +962,7 @@ async function seedComprehensive() {
             isActive: true,
             scopeType: "ALL",
             scopeIds: [],
-            createdBy: ADMIN_USER_ID,
+            createdBy: adminUser.id,
           },
         }),
       );
@@ -998,7 +1046,7 @@ async function seedComprehensive() {
           latitude: randomDecimal(18.0, 28.0),
           longitude: randomDecimal(72.0, 88.0),
           assignedShopId: shop.id,
-          assignedBy: ADMIN_USER_ID,
+          assignedBy: adminUser.id,
           fulfillmentStatus: randomItem([
             "PENDING",
             "ASSIGNED",
@@ -1145,7 +1193,7 @@ async function seedComprehensive() {
               "APPROVED",
               "PENDING",
             ]) as any,
-            reviewedBy: Math.random() > 0.4 ? ADMIN_USER_ID : null,
+            reviewedBy: Math.random() > 0.4 ? adminUser.id : null,
           },
         });
         const voters = customers.slice(0, randomInt(1, 6));
@@ -1179,7 +1227,7 @@ async function seedComprehensive() {
             "REJECTED",
             "COMPLETED",
           ]) as any,
-          approvedBy: Math.random() > 0.5 ? ADMIN_USER_ID : null,
+          approvedBy: Math.random() > 0.5 ? adminUser.id : null,
           note: "Customer raised return request via portal",
         },
       });
@@ -1229,7 +1277,7 @@ async function seedComprehensive() {
                 ? `UTR${randomInt(100000000000, 999999999999)}`
                 : null,
             status,
-            initiatedBy: ADMIN_USER_ID,
+            initiatedBy: adminUser.id,
             paidAt:
               status === "PAID"
                 ? randomDate(new Date("2024-06-01"), new Date())
@@ -1266,7 +1314,7 @@ async function seedComprehensive() {
       await db.auditLog.create({
         data: {
           sellerId: seller.id,
-          actorId: randomItem([ADMIN_USER_ID, onboardUser.id, reviewerUser.id]),
+          actorId: randomItem([adminUser.id, onboardUser.id, reviewerUser.id]),
           actorType: "platform",
           action: randomItem(auditActs),
           entityType: randomItem(["seller", "product", "seller_kyc", "order"]),
@@ -1336,6 +1384,9 @@ async function seedComprehensive() {
         });
       }
     }
+
+    // ── 23. Fix Permissions ────────────────────────────────────────────────
+    await fixSellerPermissions();
 
     logger.info("✅ Seed completed!");
     logger.info(

@@ -42,7 +42,29 @@ router.post("/login", authLimiter, validate(loginSchema), async (req, res) => {
     return res.status(403).json({ success: false, error: "Account disabled" });
   }
 
-  const { accessToken, refreshToken } = jwtService.signTokens({ sub: user.id });
+  const [platformMember, sellerMember] = await Promise.all([
+    db.platformMember.findFirst({
+      where: { userId: user.id },
+      select: { role: { select: { name: true } } },
+    }),
+    db.sellerMember.findFirst({
+      where: { userId: user.id, isActive: true },
+      select: { sellerId: true },
+    }),
+  ]);
+
+  let role = "user";
+  if (platformMember?.role?.name) {
+    role = platformMember.role.name;
+  } else if (sellerMember?.sellerId) {
+    role = "seller";
+  }
+
+  const { accessToken, refreshToken } = jwtService.signTokens({
+    sub: user.id,
+    email: user.email,
+    role,
+  });
 
   await db.user.update({
     where: { id: user.id },

@@ -71,6 +71,19 @@ export const productService = {
         },
       });
 
+      if (data.sku) {
+        await tx.productSKU.create({
+          data: {
+            productId: product.id,
+            sku: data.sku,
+            price: data.price ?? 0,
+            stock: data.stock ?? 0,
+            minQuantity: 1,
+            options: {},
+          },
+        });
+      }
+
       await tx.auditLog.create({
         data: {
           sellerId,
@@ -133,6 +146,42 @@ export const productService = {
         data,
       });
 
+      if (data.sku) {
+        const existingSku = await tx.productSKU.findUnique({
+          where: { sku: product.sku || "" },
+        });
+
+        if (existingSku && data.sku !== product.sku) {
+          await tx.productSKU.update({
+            where: { id: existingSku.id },
+            data: {
+              sku: data.sku,
+              ...(data.price !== undefined && { price: data.price }),
+              ...(data.stock !== undefined && { stock: data.stock }),
+            },
+          });
+        } else if (!existingSku && data.sku !== product.sku) {
+          await tx.productSKU.create({
+            data: {
+              productId,
+              sku: data.sku,
+              price: data.price ?? product.price ?? 0,
+              stock: data.stock ?? product.stock ?? 0,
+              minQuantity: 1,
+              options: {},
+            },
+          });
+        } else if (existingSku) {
+          await tx.productSKU.update({
+            where: { id: existingSku.id },
+            data: {
+              ...(data.price !== undefined && { price: data.price }),
+              ...(data.stock !== undefined && { stock: data.stock }),
+            },
+          });
+        }
+      }
+
       await tx.auditLog.create({
         data: {
           sellerId,
@@ -160,8 +209,15 @@ export const productService = {
       },
     });
     if (!product) throw new Error("Product not found");
+
+    const seller = await db.seller.findUnique({
+      where: { id: product.sellerId },
+      select: { id: true, name: true, businessName: true },
+    });
+
     return {
       ...product,
+      seller,
       status: product.status.toLowerCase(),
       price: product.price ? Number(product.price) : null,
       compareAtPrice: product.compareAtPrice
@@ -188,8 +244,15 @@ export const productService = {
       },
     });
     if (!product) throw new Error("Product not found");
+
+    const seller = await db.seller.findUnique({
+      where: { id: product.sellerId },
+      select: { id: true, name: true, businessName: true },
+    });
+
     return {
       ...product,
+      seller,
       status: product.status.toLowerCase(),
       price: product.price ? Number(product.price) : null,
       compareAtPrice: product.compareAtPrice

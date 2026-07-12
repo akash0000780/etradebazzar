@@ -695,6 +695,97 @@ export const orderService = {
     };
   },
 
+  async listAllOrders(filters: {
+    status?: string;
+    search?: string;
+    type?: string;
+    sellerId?: string;
+    shopId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = filters.page ?? 1;
+    const limit = filters.limit ?? 20;
+
+    const where: any = {};
+    if (filters.status) where.status = filters.status.toUpperCase();
+    if (filters.type) where.type = filters.type.toUpperCase();
+    if (filters.sellerId) where.sellerId = filters.sellerId;
+    if (filters.shopId) where.assignedShopId = filters.shopId;
+    if (filters.dateFrom || filters.dateTo) {
+      where.createdAt = {};
+      if (filters.dateFrom) where.createdAt.gte = new Date(filters.dateFrom);
+      if (filters.dateTo) where.createdAt.lte = new Date(filters.dateTo);
+    }
+    if (filters.search) {
+      where.OR = [
+        { id: { contains: filters.search, mode: "insensitive" } },
+        { displayId: { contains: filters.search, mode: "insensitive" } },
+        {
+          customer: { name: { contains: filters.search, mode: "insensitive" } },
+        },
+      ];
+    }
+
+    const [data, total] = await Promise.all([
+      db.order.findMany({
+        where,
+        include: {
+          items: { include: { product: { select: { id: true, name: true } } } },
+          customer: { select: { id: true, name: true } },
+          seller: { select: { id: true, businessName: true } },
+          addresses: true,
+          assignedShop: { select: { id: true, name: true } },
+          negotiations: { orderBy: { createdAt: "desc" } },
+        },
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      db.order.count({ where }),
+    ]);
+
+    const mapped = data.map((o) => {
+      const latestNeg = o.negotiations?.[0];
+      return {
+        ...o,
+        shopId: o.assignedShopId,
+        status: o.status.toLowerCase(),
+        paymentStatus: (o.paymentStatus as string).toLowerCase(),
+        totalAmount: o.totalAmount ? Number(o.totalAmount) : null,
+        finalAmount: o.finalAmount ? Number(o.finalAmount) : null,
+        commissionAmount: o.commissionAmount
+          ? Number(o.commissionAmount)
+          : null,
+        addresses: o.addresses.map((addr) => ({
+          ...addr,
+          shopId: addr.assignedShopId,
+          assignmentStatus: addr.fulfillmentStatus.toLowerCase(),
+        })),
+        negotiation: latestNeg
+          ? {
+              id: latestNeg.id,
+              orderId: latestNeg.orderId,
+              proposedBy:
+                latestNeg.proposedByType === "customer" ? "customer" : "seller",
+              proposedAmount: Number(latestNeg.proposedPrice),
+              message: latestNeg.note ?? undefined,
+              status: latestNeg.status.toLowerCase(),
+              createdAt: latestNeg.createdAt,
+              expiresAt: undefined,
+            }
+          : undefined,
+      };
+    });
+
+    return {
+      data: mapped,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) || 1 },
+    };
+  },
+
   async cancelOrder(orderId: string, actorId: string, actorType: string) {
     const order = await db.order.findUnique({
       where: { id: orderId },

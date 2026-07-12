@@ -194,6 +194,27 @@ export const sellerController = {
     }
   },
 
+  async reactivateSeller(req: Request, res: Response) {
+    try {
+      const { sellerId } = req.params;
+      const actorId = req.user!.id;
+      const result = await sellerService.reactivateSeller(
+        sellerId as string,
+        actorId,
+      );
+      return res.json({ success: true, data: result });
+    } catch (error: any) {
+      logger.error({ err: error.message }, "Seller reactivation failed");
+      const clientErrors = ["Seller not found", "Seller is not suspended"];
+      if (clientErrors.includes(error.message)) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  },
+
   async listMembers(req: Request, res: Response) {
     try {
       const sellerId = req.seller!.id;

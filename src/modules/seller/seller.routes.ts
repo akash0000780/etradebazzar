@@ -314,6 +314,15 @@ router.patch(
 );
 
 router.patch(
+  "/:sellerId/reactivate",
+  protect,
+  sellerLimiter,
+  setPlatformAdmin,
+  requirePlatformRole("super_admin"),
+  sellerController.reactivateSeller,
+);
+
+router.patch(
   "/:sellerId/kyc/verify",
   protect,
   sellerLimiter,

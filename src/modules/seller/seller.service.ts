@@ -387,6 +387,37 @@ export const sellerService = {
     return updated;
   },
 
+  async reactivateSeller(sellerId: string, actorId: string) {
+    const seller = await db.seller.findUnique({ where: { id: sellerId } });
+    if (!seller) throw new Error("Seller not found");
+    if (seller.status !== "SUSPENDED")
+      throw new Error("Seller is not suspended");
+
+    const updated = await db.seller.update({
+      where: { id: sellerId },
+      data: {
+        status: "APPROVED",
+        suspendedAt: null,
+        suspendedBy: null,
+      },
+    });
+
+    await db.auditLog.create({
+      data: {
+        sellerId,
+        actorId,
+        actorType: "platform",
+        action: "SELLER_REACTIVATED",
+        entityType: "seller",
+        entityId: sellerId,
+      },
+    });
+
+    await redis.del(RedisKeys.sellerStatus(sellerId));
+
+    return updated;
+  },
+
   async listMembers(
     sellerId: string,
     filters: { search?: string; role?: string; page?: number; limit?: number },

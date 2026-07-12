@@ -53,6 +53,15 @@ router.get(
   orderController.listBulkUploads,
 );
 
+router.get(
+  "/all",
+  protect,
+  sellerLimiter,
+  setPlatformAdmin,
+  requirePlatformRole("super_admin"),
+  orderController.listAllOrders,
+);
+
 router.post(
   "/bulk-action",
   protect,

@@ -213,6 +213,39 @@ export const orderController = {
         .json({ success: false, error: "Internal server error" });
     }
   },
+  async listAllOrders(req: Request, res: Response) {
+    try {
+      const {
+        status,
+        search,
+        type,
+        sellerId,
+        shopId,
+        dateFrom,
+        dateTo,
+        page,
+        limit,
+      } = req.query as Record<string, string>;
+      const result = await orderService.listAllOrders({
+        status,
+        search,
+        type,
+        sellerId,
+        shopId,
+        dateFrom,
+        dateTo,
+        page: page ? Number(page) : undefined,
+        limit: limit ? Number(limit) : undefined,
+      });
+      return res.json({ success: true, data: result.data, meta: result.meta });
+    } catch (error: any) {
+      logger.error({ err: error.message }, "List all orders failed");
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  },
+
   async bulkAction(req: Request, res: Response) {
     try {
       const sellerId = req.seller!.id;

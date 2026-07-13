@@ -80,7 +80,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/notifications", notificationRoutes);
-app.use("/api/v1/upload-asset", uploadAssetRoutes);
+app.use("/api/upload-asset", uploadAssetRoutes);
 
 app.use((req: Request, res: Response) => {
   res.status(404).json({

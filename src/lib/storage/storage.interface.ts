@@ -14,6 +14,8 @@ export interface UploadResult {
 export interface SignedUrlInput {
     key: string;
     expiresIn?: number;
+    responseContentDisposition?: "inline" | "attachment";
+    responseContentType?: string;
 }
 
 export interface DeleteInput {

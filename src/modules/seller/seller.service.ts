@@ -8,6 +8,7 @@ import {
 } from "../../lib/bank/bank.validator";
 import { assignDefaultRolePermissions } from "../../lib/permission/permission.service";
 import bcrypt from "bcryptjs";
+import { StorageFactory } from "../../lib/storage/storage.factory";
 
 const DEFAULT_SELLER_ROLES = ["owner", "manager", "staff"];
 
@@ -18,6 +19,20 @@ async function getSellerOwner(sellerId: string) {
   });
 }
 
+async function resolveKycDocumentUrls(kyc: { documents: string[] } | null) {
+  if (!kyc || !kyc.documents?.length) return kyc;
+  const storage = StorageFactory.get();
+  const signedDocuments = await Promise.all(
+    kyc.documents.map((key) =>
+      storage.getSignedUrl({
+        key,
+        expiresIn: 3600,
+        responseContentDisposition: "inline",
+      }),
+    ),
+  );
+  return { ...kyc, documents: signedDocuments };
+}
 export const sellerService = {
   async register(data: {
     name: string;
@@ -555,12 +570,12 @@ export const sellerService = {
   async listAllSellers(status?: string) {
     const where = status
       ? {
-          status: status.toUpperCase() as
-            | "PENDING"
-            | "APPROVED"
-            | "REJECTED"
-            | "SUSPENDED",
-        }
+        status: status.toUpperCase() as
+          | "PENDING"
+          | "APPROVED"
+          | "REJECTED"
+          | "SUSPENDED",
+      }
       : {};
     return db.seller.findMany({
       where,
@@ -580,7 +595,7 @@ export const sellerService = {
   },
 
   async getSellerById(sellerId: string) {
-    return db.seller.findUnique({
+    const seller = await db.seller.findUnique({
       where: { id: sellerId },
       select: {
         id: true,
@@ -612,8 +627,11 @@ export const sellerService = {
         },
       },
     });
-  },
 
+    if (!seller) return null;
+
+    return { ...seller, kyc: await resolveKycDocumentUrls(seller.kyc) };
+  },
   async verifyKyc(sellerId: string, actorId: string) {
     const kyc = await db.sellerKyc.findUnique({ where: { sellerId } });
     if (!kyc) throw new Error("KYC not found");

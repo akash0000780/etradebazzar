@@ -66,6 +66,12 @@ export class S3Provider implements StorageProvider {
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: input.key,
+      ...(input.responseContentDisposition && {
+        ResponseContentDisposition: input.responseContentDisposition,
+      }),
+      ...(input.responseContentType && {
+        ResponseContentType: input.responseContentType,
+      }),
     });
 
     return getSignedUrl(this.client, command, {

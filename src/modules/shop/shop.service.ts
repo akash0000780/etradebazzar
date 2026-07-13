@@ -117,6 +117,11 @@ export const shopService = {
       updateData.slug = await uniqueSlug(data.name);
     }
 
+    const oldLogoKey =
+      data.logoKey && data.logoKey !== shop.logoKey ? shop.logoKey : null;
+    const oldBannerKey =
+      data.bannerKey && data.bannerKey !== shop.bannerKey ? shop.bannerKey : null;
+
     const updated = await db.$transaction(async (tx) => {
       const updatedShop = await tx.shop.update({
         where: { id: shopId },
@@ -138,9 +143,17 @@ export const shopService = {
       return updatedShop;
     });
 
+    if (oldLogoKey || oldBannerKey) {
+      const storage = StorageFactory.get();
+      await Promise.all(
+        [oldLogoKey, oldBannerKey]
+          .filter((key): key is string => !!key)
+          .map((key) => storage.delete({ key }).catch(() => null)),
+      );
+    }
+
     return updated;
   },
-
   async getShop(sellerId: string, userId: string, shopId: string) {
     await shopAccessService.assertShopAccess(sellerId, userId, shopId);
 

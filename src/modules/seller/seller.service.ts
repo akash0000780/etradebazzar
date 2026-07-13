@@ -19,13 +19,23 @@ async function getSellerOwner(sellerId: string) {
   });
 }
 
+function extractStorageKey(value: string): string {
+  if (!/^https?:\/\//i.test(value)) return value;
+  try {
+    const url = new URL(value);
+    return decodeURIComponent(url.pathname.replace(/^\//, ""));
+  } catch {
+    return value;
+  }
+}
+
 async function resolveKycDocumentUrls(kyc: { documents: string[] } | null) {
   if (!kyc || !kyc.documents?.length) return kyc;
   const storage = StorageFactory.get();
   const signedDocuments = await Promise.all(
-    kyc.documents.map((key) =>
+    kyc.documents.map((doc) =>
       storage.getSignedUrl({
-        key,
+        key: extractStorageKey(doc),
         expiresIn: 3600,
         responseContentDisposition: "inline",
       }),

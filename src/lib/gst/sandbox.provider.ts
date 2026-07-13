@@ -22,29 +22,43 @@ export class SandboxGstInstance implements GstProvider {
     });
     if (!res.ok) throw new Error("Sandbox GST auth failed");
     const data = (await res.json()) as any;
-    return data.access_token;
+    return data.data.access_token;
   }
+
   async verifyGst(gstin: string): Promise<GstDetails> {
     const token = await this.getAccessToken();
 
     const res = await fetch(
-      `${BASE_URL}/gst/compliance/public/gstin/search?gstin=${gstin}`,
+      `${BASE_URL}/gst/compliance/public/gstin/search`,
       {
+        method: "POST",
         headers: {
           Authorization: token,
           "x-api-key": this.apiKey,
           "x-api-version": "1.0",
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify({ gstin }),
       },
     );
 
-    if (!res.ok)
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      console.error("Sandbox GST search failed", res.status, errBody);
       throw new Error(
         "GST verification failed  invalid GSTIN or service error",
       );
+    }
 
-    const data = (await res.json()) as any;
-    const result = data.data;
+    const payload = (await res.json()) as any;
+
+    const result = payload.data?.data ?? payload.data;
+
+    if (!result || !result.gstin) {
+      throw new Error(
+        "GST verification failed  invalid GSTIN or service error",
+      );
+    }
 
     return {
       gstin: result.gstin,

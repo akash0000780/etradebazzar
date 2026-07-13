@@ -26,8 +26,8 @@ function assertSafeFile(file: Express.Multer.File): string {
 export const uploadAssetService = {
     async uploadAsset(userId: string, file: Express.Multer.File) {
         const ext = assertSafeFile(file);
-        const safeKey = `customer-uploads/${userId}/${Date.now()}-${randomUUID()}${ext}`;
-
+        const safeKey = `shop-assets/${userId}/${Date.now()}-${randomUUID()}${ext}`;
+        
         const storage = StorageFactory.get();
         const upload = await storage.upload({
             key: safeKey,

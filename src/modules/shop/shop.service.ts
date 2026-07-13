@@ -2,6 +2,8 @@ import { db } from "../../db";
 import { generateDisplayId } from "../../lib/uid/uid.generator";
 
 import { shopAccessService } from "./shop-access.service";
+import { StorageFactory } from "../../lib/storage/storage.factory";
+
 function generateSlug(name: string): string {
   return name
     .toLowerCase()
@@ -19,6 +21,19 @@ async function uniqueSlug(name: string): Promise<string> {
   }
   return slug;
 }
+export async function resolveShopMediaUrls<T extends { logo?: string | null; logoKey?: string | null; banner?: string | null; bannerKey?: string | null }>(
+  shop: T,
+): Promise<T> {
+  const storage = StorageFactory.get();
+  const result = { ...shop };
+  if (shop.logoKey) {
+    result.logo = await storage.getSignedUrl({ key: shop.logoKey, expiresIn: 3600 });
+  }
+  if (shop.bannerKey) {
+    result.banner = await storage.getSignedUrl({ key: shop.bannerKey, expiresIn: 3600 });
+  }
+  return result;
+}
 
 export const shopService = {
   async createShop(
@@ -29,6 +44,8 @@ export const shopService = {
       description?: string;
       category: string;
       logo?: string;
+      logoKey?: string;
+      bannerKey?: string;
       banner?: string;
       contactEmail: string;
       contactPhone: string;
@@ -79,6 +96,8 @@ export const shopService = {
       category: string;
       logo: string;
       banner: string;
+      logoKey?: string;
+      bannerKey?: string;
       contactEmail: string;
       contactPhone: string;
       returnPolicy: string;
@@ -132,7 +151,7 @@ export const shopService = {
       },
     });
     if (!shop) throw new Error("Shop not found");
-    return shop;
+    return resolveShopMediaUrls(shop);
   },
 
   async listShops(
@@ -178,6 +197,9 @@ export const shopService = {
           description: true,
           status: true,
           logo: true,
+          logoKey: true,
+          banner: true,
+          bannerKey: true,
           createdAt: true,
           pickupCity: true,
           pickupState: true,
@@ -197,7 +219,9 @@ export const shopService = {
       SUSPENDED: "suspended",
     };
 
-    const mapped = data.map((s) => ({
+    const withSignedUrls = await Promise.all(data.map(resolveShopMediaUrls));
+
+    const mapped = withSignedUrls.map((s) => ({
       ...s,
       status: STATUS_MAP[s.status] ?? s.status.toLowerCase(),
     }));
@@ -247,6 +271,9 @@ export const shopService = {
           description: true,
           status: true,
           logo: true,
+          logoKey: true,
+          banner: true,
+          bannerKey: true,
           createdAt: true,
           contactEmail: true,
           contactPhone: true,
@@ -269,7 +296,9 @@ export const shopService = {
       SUSPENDED: "suspended",
     };
 
-    const mapped = data.map((s) => ({
+    const withSignedUrls = await Promise.all(data.map(resolveShopMediaUrls));
+
+    const mapped = withSignedUrls.map((s) => ({
       ...s,
       status: STATUS_MAP[s.status] ?? s.status.toLowerCase(),
     }));

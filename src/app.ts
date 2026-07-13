@@ -30,6 +30,7 @@ import userRoutes from "./modules/user/user.routes";
 import customerRoutes from "./modules/customer/customer.routes";
 import cartRoutes from "./modules/cart/cart.routes";
 import notificationRoutes from "./modules/notification/notification.routes";
+import uploadAssetRoutes from "./modules/upload-asset/upload-asset.routes";
 const app: Application = express();
 
 app.use(...security);
@@ -79,6 +80,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/v1/upload-asset", uploadAssetRoutes);
 
 app.use((req: Request, res: Response) => {
   res.status(404).json({

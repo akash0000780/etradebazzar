@@ -3,6 +3,7 @@ export interface UploadInput {
     buffer: Buffer;
     mimeType: string;
     size: number;
+    contentDisposition?: string;
 }
 
 export interface UploadResult {

@@ -231,7 +231,9 @@ model Shop {
   description       String?
   category          String
   logo              String?
+  logoKey           String?
   banner            String?
+  bannerKey         String?
   contactEmail      String
   contactPhone      String
   returnPolicy      String?

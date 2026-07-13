@@ -15,27 +15,4 @@ export const uploadAssetController = {
             return res.status(500).json({ success: false, error: "Internal server error" });
         }
     },
-
-    async listRecent(req: Request, res: Response) {
-        try {
-            const userId = req.user!.id;
-            const { limit } = req.query as Record<string, string>;
-            const result = await uploadAssetService.listRecent(userId, limit ? Number(limit) : undefined);
-            return res.json({ success: true, data: result });
-        } catch (error: any) {
-            return res.status(500).json({ success: false, error: "Internal server error" });
-        }
-    },
-
-    async deleteAsset(req: Request, res: Response) {
-        try {
-            const userId = req.user!.id;
-            const { assetId } = req.params;
-            const result = await uploadAssetService.deleteAsset(userId, assetId as string);
-            return res.json({ success: true, data: result });
-        } catch (error: any) {
-            if (error.message === "Asset not found") return res.status(404).json({ success: false, error: error.message });
-            return res.status(500).json({ success: false, error: "Internal server error" });
-        }
-    },
 };

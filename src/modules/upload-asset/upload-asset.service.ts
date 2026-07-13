@@ -1,4 +1,3 @@
-import { db } from "../../db/index";
 import { StorageFactory } from "../../lib/storage/storage.factory";
 import { randomUUID } from "crypto";
 
@@ -38,27 +37,11 @@ export const uploadAssetService = {
             contentDisposition: "attachment",
         });
 
-        return db.customerUploadAsset.create({
-            data: { userId, url: upload.url, key: upload.key, fileType: file.mimetype },
-        });
-    },
-
-    async listRecent(userId: string, limit = 20) {
-        return db.customerUploadAsset.findMany({
-            where: { userId },
-            orderBy: { createdAt: "desc" },
-            take: limit,
-        });
-    },
-
-    async deleteAsset(userId: string, assetId: string) {
-        const asset = await db.customerUploadAsset.findFirst({ where: { id: assetId, userId } });
-        if (!asset) throw new Error("Asset not found");
-
-        const storage = StorageFactory.get();
-        await storage.delete({ key: asset.key }).catch(() => null);
-
-        await db.customerUploadAsset.delete({ where: { id: assetId } });
-        return { deleted: true };
+        return {
+            id: randomUUID(),
+            url: upload.url,
+            key: upload.key,
+            fileType: file.mimetype,
+        };
     },
 };

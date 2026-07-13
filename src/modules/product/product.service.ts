@@ -1,6 +1,7 @@
 import { db } from "../../db/index";
 import { notificationService } from "../notification/notification.service";
 import { generateDisplayId } from "../../lib/uid/uid.generator";
+import { resolveImageUrls } from "./product-image.service";
 
 export const productService = {
   async createProduct(
@@ -215,9 +216,12 @@ export const productService = {
       select: { id: true, name: true, businessName: true },
     });
 
+    const images = await resolveImageUrls(product.images);
+
     return {
       ...product,
       seller,
+      images,
       status: product.status.toLowerCase(),
       price: product.price ? Number(product.price) : null,
       compareAtPrice: product.compareAtPrice
@@ -250,9 +254,12 @@ export const productService = {
       select: { id: true, name: true, businessName: true },
     });
 
+    const images = await resolveImageUrls(product.images);
+
     return {
       ...product,
       seller,
+      images,
       status: product.status.toLowerCase(),
       price: product.price ? Number(product.price) : null,
       compareAtPrice: product.compareAtPrice

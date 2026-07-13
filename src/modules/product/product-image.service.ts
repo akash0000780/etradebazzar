@@ -4,6 +4,19 @@ import { generateProductImageKey, validateImageFile } from "../../lib/storage/st
 
 const MAX_IMAGES_PER_PRODUCT = 20;
 
+export const resolveImageUrls = async <T extends { key: string; url: string }>(
+    images: T[],
+): Promise<T[]> => {
+    if (images.length === 0) return images;
+    const storage = StorageFactory.get();
+    return Promise.all(
+        images.map(async (img) => ({
+            ...img,
+            url: await storage.getSignedUrl({ key: img.key, expiresIn: 3600 }),
+        })),
+    );
+}
+
 export const productImageService = {
     async uploadImage(sellerId: string, productId: string, file: Express.Multer.File) {
         const product = await db.product.findFirst({ where: { id: productId, sellerId } });
@@ -78,9 +91,10 @@ export const productImageService = {
     },
 
     async listImages(productId: string) {
-        return db.productImage.findMany({
+        const images = await db.productImage.findMany({
             where: { productId },
             orderBy: { order: "asc" },
         });
+        return resolveImageUrls(images);
     },
 };

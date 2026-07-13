@@ -3,7 +3,7 @@ import { generateDisplayId } from "../../lib/uid/uid.generator";
 
 import { shopAccessService } from "./shop-access.service";
 import { StorageFactory } from "../../lib/storage/storage.factory";
-
+import { logger } from "../../utils/logger";
 function generateSlug(name: string): string {
   return name
     .toLowerCase()
@@ -148,7 +148,15 @@ export const shopService = {
       await Promise.all(
         [oldLogoKey, oldBannerKey]
           .filter((key): key is string => !!key)
-          .map((key) => storage.delete({ key }).catch(() => null)),
+          .map((key) =>
+            storage.delete({ key }).catch((err) => {
+              logger.warn(
+                { err: err?.message, key, shopId },
+                "Failed to delete old shop media from storage",
+              );
+              return null;
+            }),
+          ),
       );
     }
 

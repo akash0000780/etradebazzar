@@ -1,6 +1,9 @@
 import { db } from "../src/db";
 import { redis, RedisKeys } from "../src/db/redis";
-import { assignDefaultRolePermissions, seedPlatformPermissions } from "../src/lib/permission/permission.service";
+import {
+  assignDefaultRolePermissions,
+  seedPlatformPermissions,
+} from "../src/lib/permission/permission.service";
 import { generateDisplayId } from "../src/lib/uid/uid.generator";
 import { logger } from "../src/utils/logger";
 import bcrypt from "bcryptjs";
@@ -288,8 +291,13 @@ async function fixSellerPermissions() {
 
 // Seed
 async function seedComprehensive() {
-  if (process.env.NODE_ENV === "production") {
-    logger.error("Refusing to run seed-comprehensive.ts with NODE_ENV=production");
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.ALLOW_PROD_MIGRATE !== "true"
+  ) {
+    logger.error(
+      "Refusing to run seed-comprehensive.ts with NODE_ENV=production without ALLOW_PROD_MIGRATE=true",
+    );
     process.exit(1);
   }
 
@@ -1072,10 +1080,10 @@ async function seedComprehensive() {
               oStatus === "DELIVERED"
                 ? "DELIVERED"
                 : (randomItem([
-                  "BOOKED",
-                  "IN_TRANSIT",
-                  "OUT_FOR_DELIVERY",
-                ]) as any),
+                    "BOOKED",
+                    "IN_TRANSIT",
+                    "OUT_FOR_DELIVERY",
+                  ]) as any),
             estimatedDelivery: randomDate(
               new Date(),
               new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),

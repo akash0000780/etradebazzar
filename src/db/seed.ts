@@ -5,8 +5,13 @@ import { seedPlatformPermissions } from "../lib/permission/permission.service";
 import crypto from "crypto";
 
 async function seed() {
-  if (process.env.NODE_ENV === "production") {
-    logger.error("Refusing to run seed.ts with NODE_ENV=production");
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.ALLOW_PROD_MIGRATE !== "true"
+  ) {
+    logger.error(
+      "Refusing to run seed.ts with NODE_ENV=production without ALLOW_PROD_MIGRATE=true",
+    );
     process.exit(1);
   }
 

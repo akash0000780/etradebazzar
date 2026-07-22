@@ -4,11 +4,27 @@ export async function getCommissionRate(
   productId: string,
   category: string
 ): Promise<number> {
-  const commission = await db.productCommission.findFirst({
-    where: { OR: [{ productId }, { category }] },
+  const now = new Date();
+
+  const productRate = await db.productCommission.findFirst({
+    where: {
+      productId,
+      effectiveFrom: { lte: now },
+    },
     orderBy: { effectiveFrom: "desc" },
   });
-  return Number(commission?.rate ?? 0);
+
+  if (productRate) return Number(productRate.rate);
+
+  const categoryRate = await db.productCommission.findFirst({
+    where: {
+      productId: null,
+      category,
+      effectiveFrom: { lte: now },
+    },
+    orderBy: { effectiveFrom: "desc" },
+  });
+  return Number(categoryRate?.rate ?? 0);
 }
 
 export async function isHighTicket(
@@ -16,13 +32,17 @@ export async function isHighTicket(
   category: string,
   totalAmount: number
 ): Promise<boolean> {
-  const threshold = await db.orderThreshold.findFirst({
-    where: {
+  const categoryThreshold = await db.orderThreshold.findFirst({
+    where: { 
       sellerId,
-      OR: [{ productCategory: category }, { productCategory: null }],
-    },
-    orderBy: { productCategory: "desc" },
+      productCategory: category },
   });
+
+  const threshold =
+    categoryThreshold ??
+    (await db.orderThreshold.findFirst({
+      where: { sellerId, productCategory: null },
+    }));
   if (!threshold) return false;
   return totalAmount > Number(threshold.amount);
 }

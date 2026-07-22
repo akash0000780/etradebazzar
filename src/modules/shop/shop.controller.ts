@@ -11,7 +11,11 @@ export const shopController = {
       return res.status(201).json({ success: true, data: result });
     } catch (error: any) {
       logger.error({ err: error.message }, "Create shop failed");
-      const clientErrors = ["Seller not found", "Seller not approved"];
+      const clientErrors = [
+        "Seller not found",
+        "Seller not approved",
+        "Pickup city and state could not be determined from the provided pincode. Please provide them manually.",
+      ];
       if (clientErrors.includes(error.message)) {
         return res.status(400).json({ success: false, error: error.message });
       }
@@ -35,7 +39,11 @@ export const shopController = {
       return res.json({ success: true, data: result });
     } catch (error: any) {
       logger.error({ err: error.message }, "Update shop failed");
-      const clientErrors = ["Shop not found", "Cannot update rejected shop"];
+      const clientErrors = [
+        "Shop not found",
+        "Cannot update rejected shop",
+        "Pickup city and state could not be determined from the provided pincode. Please provide them manually.",
+      ];
       if (clientErrors.includes(error.message)) {
         return res.status(400).json({ success: false, error: error.message });
       }

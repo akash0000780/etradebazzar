@@ -11,7 +11,6 @@ export interface SearchProductsInput {
     maxPrice?: number;
     sellerId?: string;
     shopId?: string;
-    status?: string;
     page?: number;
     limit?: number;
 }
@@ -55,7 +54,7 @@ export const productSearchService = {
         }
 
         const where: Prisma.ProductWhereInput = {
-            status: (input.status as any) ?? "APPROVED",
+            status: "APPROVED",
 
             ...(input.q && {
                 OR: [

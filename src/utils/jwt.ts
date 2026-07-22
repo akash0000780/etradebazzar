@@ -2,36 +2,44 @@ import jwt, { SignOptions, VerifyOptions, Algorithm } from "jsonwebtoken";
 import crypto from "crypto";
 
 import { config } from "../../config/config";
+import { redis, RedisKeys } from "../db/redis";
+import { logger } from "../utils/logger";
 
 const PRIVATE_KEY = config.jwtPrivateKey;
 const PUBLIC_KEY = config.jwtPublicKey;
 const FALLBACK_SECRET = config.jwtSecret;
 
-if (!PRIVATE_KEY || !PUBLIC_KEY) {
-  if (!FALLBACK_SECRET || FALLBACK_SECRET.length < 32) {
-    throw new Error(
-      "JWT config error: Provide jwtPrivateKey + jwtPublicKey (RS256) OR a strong jwtSecret (≥32 chars)"
-    );
-  }
-  console.warn("JWT: No RSA keys → using HS256 fallback (not ideal for production)");
+if ((PRIVATE_KEY && !PUBLIC_KEY) || (!PRIVATE_KEY && PUBLIC_KEY)) {
+  throw new Error("Only one of jwtPrivateKey/jwtPublicKey is set refusing to boot with a broken RS256 config");
+}
+if (!PRIVATE_KEY && !PUBLIC_KEY) {
+  logger.warn("No RS256 keys configured falling back to HS256 symmetric signing");
 }
 
 const ALGORITHM: Algorithm = PRIVATE_KEY && PUBLIC_KEY ? "RS256" : "HS256";
 
-interface JwtPayload {
+interface SignInput {
   sub: string;
   email?: string;
   role?: string;
+}
+
+interface JwtPayload extends SignInput {
+  type?: "access" | "refresh";
+  jti?: string;
+  fam?: string;
+  exp?: number;
   [key: string]: any;
 }
 
 interface Tokens {
   accessToken: string;
   refreshToken: string;
+  sessionId: string;
 }
 
 class JwtService {
-  private sign(payload: any, expiresIn: string, includeJti = false): string {
+  private sign(payload: SignInput,type: "access" | "refresh",expiresIn: string, jti: string, fam?: string): string {
     const options: SignOptions = {
       algorithm: ALGORITHM,
       expiresIn: expiresIn as SignOptions["expiresIn"],
@@ -39,13 +47,9 @@ class JwtService {
       audience: config.jwtAudience,
     };
 
-    if (includeJti) {
-      payload.jti = crypto.randomUUID();
-    }
-
     const key = ALGORITHM === "RS256" ? PRIVATE_KEY : FALLBACK_SECRET;
 
-    return jwt.sign(payload, key!, options);
+    return jwt.sign({ ...payload, type, jti, ...(fam ? { fam } : {}) }, key!, options);
   }
 
   private verify<T extends object = JwtPayload>(token: string): T & { jti?: string } {
@@ -66,27 +70,71 @@ class JwtService {
     }
   }
 
-  signTokens(payload: JwtPayload): Tokens {
+  signTokens(payload: SignInput, opts?: { sessionId?: string; family?: string }): Tokens {
+    const sessionId = opts?.sessionId ?? crypto.randomUUID();
+    const family = opts?.family ?? crypto.randomUUID();
+
     return {
-      accessToken: this.sign({ ...payload }, config.accessTokenExpiresIn),
-      refreshToken: this.sign({ ...payload, type: "refresh" }, config.refreshTokenExpiresIn, true),
+      accessToken: this.sign(payload, "access", config.accessTokenExpiresIn, sessionId),
+      refreshToken: this.sign(payload, "refresh", config.refreshTokenExpiresIn, crypto.randomUUID(), family),
+      sessionId,
     };
   }
-  refreshToken(oldRefreshToken: string): Tokens {
-    const payload = this.verify<JwtPayload & { jti: string }>(oldRefreshToken);
 
-    if (!payload.jti) {
-      throw new Error("Invalid refresh token – missing jti");
+  async refreshToken(oldRefreshToken: string): Promise<Tokens> {
+    const payload = this.verify<JwtPayload>(oldRefreshToken);
+
+    if (payload.type !== "refresh") {
+      throw new Error("Invalid token type");
     }
-    return this.signTokens({
-      sub: payload.sub,
-      email: payload.email,
-      role: payload.role,
-    });
+    if (!payload.jti || !payload.fam) {
+      throw new Error("Invalid refresh token missing jti/fam");
+    }
+
+    const familyBurned = await redis.get(RedisKeys.tokenFamilyBlacklist(payload.fam));
+    if (familyBurned) {
+      throw new Error("Refresh token reuse detected");
+    }
+
+    const ttlSeconds = this.getRemainingTtl(payload);
+
+    const claimed = ttlSeconds > 0
+      ? await redis.set(RedisKeys.tokenBlacklist(payload.jti), "1", "EX", ttlSeconds, "NX")
+      : "OK"; 
+
+    if (claimed === null) {
+      await redis.setex(RedisKeys.tokenFamilyBlacklist(payload.fam), ttlSeconds > 0 ? ttlSeconds : 60, "1");
+      logger.error({ sub: payload.sub, fam: payload.fam }, "SECURITY: refresh token reuse family revoked");
+      throw new Error("Refresh token reuse detected");
+    }
+
+    return this.signTokens(
+      { sub: payload.sub, email: payload.email, role: payload.role },
+      { family: payload.fam }
+    );
   }
 
-  verifyToken<T extends object = JwtPayload>(token: string) {
-    return this.verify<T>(token);
+  verifyToken<T extends object = JwtPayload>(token: string, expectedType?: "access" | "refresh") {
+    const payload = this.verify<T & { type?: string }>(token);
+    if (expectedType && payload.type !== expectedType) {
+      throw new Error("Invalid token type");
+    }
+    return payload;
+  }
+
+  async revokeRefreshFamily(refreshToken: string): Promise<void> {
+    try {
+      const payload = this.verify<JwtPayload>(refreshToken);
+      if (!payload.fam) return;
+      const ttl = this.getRemainingTtl(payload);
+      await redis.setex(RedisKeys.tokenFamilyBlacklist(payload.fam), ttl > 0 ? ttl : 60, "1");
+    } catch {
+    }
+  }
+
+  private getRemainingTtl(payload: { exp?: number }): number {
+    if (!payload.exp) return 0;
+    return Math.max(0, payload.exp - Math.floor(Date.now() / 1000));
   }
 }
 

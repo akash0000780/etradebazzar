@@ -1,7 +1,6 @@
 import { GstFactory } from "../../lib/gst/gst.factory";
 import { db } from "../../db/index";
-import type { GstDetails } from "../../lib/gst/gst.interface";
-
+import { GstDetails } from "../../lib/gst/gst.interface";
 function getMockGstDetails(gstin: string): GstDetails {
   return {
     gstin,
@@ -14,17 +13,16 @@ function getMockGstDetails(gstin: string): GstDetails {
     raw: { mock: true },
   };
 }
-
 export const gstService = {
+
   async verifyGst(gstin: string) {
-    if (!/^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}$/.test(gstin)) {
-      throw new Error("Invalid GSTIN format");
-    }
 
     if (process.env.GST_MOCK === "true") {
       return getMockGstDetails(gstin);
     }
-
+    if (!/^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}$/.test(gstin)) {
+      throw new Error("Invalid GSTIN format");
+    }
     const provider = GstFactory.get();
     return provider.verifyGst(gstin);
   },
@@ -36,10 +34,13 @@ export const gstService = {
       throw new Error(`GST registration is ${details.status}  cannot proceed`);
     }
 
-    await db.sellerKyc.updateMany({
+    const result = await db.sellerKyc.updateMany({
       where: { sellerId },
       data: { gstNumber: gstin },
     });
+    if (result.count === 0) {
+      throw new Error("KYC record not found: complete KYC before verifying GST");
+    }
 
     return details;
   },

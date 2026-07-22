@@ -1,4 +1,6 @@
 import { db } from "../../db/index";
+import { redis } from "../../db/redis";
+import { logger } from "../../utils/logger";
 import { getCommissionRate, isHighTicket } from "../../utils/commission";
 import { notificationService } from "../notification/notification.service";
 import { checkLowStock } from "../../lib/inventory/inventory.alert";
@@ -7,6 +9,25 @@ import { generateDisplayId } from "../../lib/uid/uid.generator";
 import { creditEngine } from "../../lib/credit-engine/credit-rules";
 import { recommendationService } from "../../lib/order-assignment/recommendation.service";
 import { reliabilityService } from "../../lib/order-assignment/reliability.service";
+import { OrderStatus } from "../../../prisma/generated/client";
+import { slaConfigService } from "../platform/sla-config.service";
+import { shipmentService } from "../shipment/shipment.service";
+
+const ORDER_LOCK_TTL = 15;
+const IDEMPOTENCY_TTL_SECONDS = 60 * 60 * 24; // 24h durable window
+
+async function acquireOrderLock(key: string): Promise<boolean> {
+  const result = await redis.set(`order:lock:${key}`, "1", "EX", ORDER_LOCK_TTL, "NX");
+  return result === "OK";
+}
+
+async function releaseOrderLock(key: string): Promise<void> {
+  await redis.del(`order:lock:${key}`);
+}
+
+function idempotencyRedisKey(customerId: string, idempotencyKey: string): string {
+  return `order:idem:${customerId}:${idempotencyKey}`;
+}
 
 async function getCustomerContact(customerId: string) {
   return db.user.findUnique({
@@ -17,6 +38,54 @@ async function getCustomerContact(customerId: string) {
 
 export const orderService = {
   async createOrder(
+    customerId: string,
+    idempotencyKey: string,
+    data: {
+      sellerId: string;
+      type: "STANDARD" | "SAMPLE";
+      items: { productId: string; quantity: number }[];
+      deliveryAddress: {
+        receiverName: string;
+        phone: string;
+        street: string;
+        city: string;
+        state: string;
+        pincode: string;
+        latitude?: number;
+        longitude?: number;
+      };
+      discountAmount?: number;
+      couponCode?: string;
+    },
+  ) {
+    const idemKey = idempotencyRedisKey(customerId, idempotencyKey);
+
+    const existingOrderId = await redis.get(idemKey);
+    if (existingOrderId) {
+      return this.getOrder(existingOrderId, customerId);
+    }
+
+    const lockKey = `create:${customerId}:${idempotencyKey}`;
+    const locked = await acquireOrderLock(lockKey);
+    if (!locked) {
+      throw new Error("Duplicate order submission detected, please wait");
+    }
+
+    try {
+      const raceFixed = await redis.get(idemKey);
+      if (raceFixed) {
+        return this.getOrder(raceFixed, customerId);
+      }
+
+      const order = await this._createOrderInner(customerId, data);
+      await redis.setex(idemKey, IDEMPOTENCY_TTL_SECONDS, order.id);
+      return order;
+    } finally {
+      await releaseOrderLock(lockKey);
+    }
+  },
+
+  async _createOrderInner(
     customerId: string,
     data: {
       sellerId: string;
@@ -32,8 +101,11 @@ export const orderService = {
         latitude?: number;
         longitude?: number;
       };
+      discountAmount?: number;
+      couponCode?: string;
     },
   ) {
+
     const products = await db.product.findMany({
       where: {
         id: { in: data.items.map((i) => i.productId) },
@@ -62,7 +134,19 @@ export const orderService = {
       return { productId: item.productId, quantity: item.quantity, unitPrice };
     });
 
-    const categoryName = products[0]!.category.name;
+    const discountAmount = data.discountAmount && data.discountAmount > 0
+      ? Math.min(data.discountAmount, totalAmount)
+      : 0;
+    const finalAmount = discountAmount > 0
+      ? parseFloat((totalAmount - discountAmount).toFixed(2))
+      : undefined;
+
+    const primaryItem = itemsData.reduce((max, cur) =>
+      cur.unitPrice * cur.quantity > max.unitPrice * max.quantity ? cur : max
+    );
+    const primaryProduct = products.find((p) => p.id === primaryItem.productId)!;
+    const categoryName = primaryProduct.category.name;
+
     const highTicket = await isHighTicket(
       data.sellerId,
       categoryName,
@@ -70,10 +154,10 @@ export const orderService = {
     );
     const orderType = highTicket ? "HIGH_TICKET" : data.type;
     const commissionRate = await getCommissionRate(
-      products[0]!.id,
+      primaryProduct.id,
       categoryName,
     );
-    const commissionAmount = (totalAmount * commissionRate) / 100;
+    const commissionAmount = ((finalAmount ?? totalAmount) * commissionRate) / 100;
 
     const displayId = await generateDisplayId("order");
 
@@ -102,6 +186,12 @@ export const orderService = {
         }
       }
     }
+    const packingSla = initialStatus === "CONFIRMED"
+      ? await slaConfigService.getSlaConfig()
+      : null;
+    const packingDeadline = packingSla?.packing_sla_hour
+      ? new Date(Date.now() + packingSla.packing_sla_hour * 60 * 60 * 1000)
+      : undefined;
 
     const order = await db.$transaction(async (tx) => {
       const created = await tx.order.create({
@@ -112,9 +202,12 @@ export const orderService = {
           displayId,
           status: initialStatus,
           totalAmount,
+          finalAmount,
+          discountAmount: discountAmount > 0 ? discountAmount : undefined,
           commissionRate,
           commissionAmount,
           assignedShopId: autoAssignedShopId,
+          packingDeadline,
           items: { create: itemsData },
           addresses: {
             create: {
@@ -154,7 +247,7 @@ export const orderService = {
           action: "ORDER_CREATED",
           entityType: "order",
           entityId: created.id,
-          metadata: { type: orderType, totalAmount },
+          metadata: { type: orderType, totalAmount, finalAmount, discountAmount, couponCode: data.couponCode },
         },
       });
 
@@ -206,10 +299,46 @@ export const orderService = {
 
   async createBulkOrder(
     customerId: string,
+    idempotencyKey: string,
     sellerId: string,
     items: { productId: string; quantity: number }[],
     file: Express.Multer.File,
   ) {
+    const idemKey = idempotencyRedisKey(customerId, idempotencyKey);
+
+    const existingOrderId = await redis.get(idemKey);
+    if (existingOrderId) {
+      return this.getOrder(existingOrderId, customerId);
+    }
+
+    const lockKey = `create:bulk:${customerId}:${idempotencyKey}`;
+    const locked = await acquireOrderLock(lockKey);
+    if (!locked) {
+      throw new Error("Duplicate order submission detected, please wait");
+    }
+
+    try {
+      const raceFixed = await redis.get(idemKey);
+      if (raceFixed) {
+        return this.getOrder(raceFixed, customerId);
+      }
+
+      const order = await this._createBulkOrderInner(customerId, sellerId, items, file);
+      await redis.setex(idemKey, IDEMPOTENCY_TTL_SECONDS, order.id);
+      return order;
+    } finally {
+      await releaseOrderLock(lockKey);
+    }
+  },
+
+  async _createBulkOrderInner(
+    customerId: string,
+    sellerId: string,
+    items: { productId: string; quantity: number }[],
+    file: Express.Multer.File,
+  ) {
+    const MAX_BULK_ROWS = 500;
+
     const XLSX = await import("xlsx");
     const workbook = XLSX.read(file.buffer, { type: "buffer" });
     const sheetName = workbook.SheetNames[0];
@@ -219,6 +348,9 @@ export const orderService = {
     const rows = XLSX.utils.sheet_to_json<any>(sheet);
 
     if (!rows.length) throw new Error("XLS file is empty");
+    if (rows.length > MAX_BULK_ROWS) {
+      throw new Error(`Bulk upload exceeds maximum of ${MAX_BULK_ROWS} addresses`);
+    }
 
     const requiredCols = [
       "receiverName",
@@ -251,9 +383,14 @@ export const orderService = {
       return { productId: item.productId, quantity: item.quantity, unitPrice };
     });
 
+    const primaryItem = itemsData.reduce((max, cur) =>
+      cur.unitPrice * cur.quantity > max.unitPrice * max.quantity ? cur : max
+    );
+    const primaryProduct = products.find((p) => p.id === primaryItem.productId)!;
+
     const commissionRate = await getCommissionRate(
-      products[0]!.id,
-      products[0]!.category.name,
+      primaryProduct.id,
+      primaryProduct.category.name,
     );
     const commissionAmount = (totalAmount * commissionRate) / 100;
 
@@ -336,10 +473,18 @@ export const orderService = {
     orderId: string,
     actorId: string,
     actorType: string,
+    sellerId: string | undefined,
     data: { proposedPrice: number; note?: string; meetLink?: string },
   ) {
     const order = await db.order.findUnique({ where: { id: orderId } });
     if (!order) throw new Error("Order not found");
+
+    const isCustomer = actorType === "customer" && order.customerId === actorId;
+    const isOwningSeller = actorType === "seller" && sellerId && order.sellerId === sellerId;
+    if (!isCustomer && !isOwningSeller) {
+      throw new Error("Order not found");
+    }
+
     if (order.status !== "NEGOTIATING")
       throw new Error("Order is not in negotiation");
 
@@ -376,39 +521,54 @@ export const orderService = {
     negotiationId: string,
     actorId: string,
     actorType: string,
+    sellerId: string | undefined,
     data: {
       action: "ACCEPT" | "REJECT" | "COUNTER";
       counterPrice?: number;
       note?: string;
     },
   ) {
-    const negotiation = await db.orderNegotiation.findFirst({
-      where: { id: negotiationId, orderId },
-    });
-    if (!negotiation) throw new Error("Negotiation not found");
-    if (negotiation.status !== "PENDING")
-      throw new Error("Proposal already responded to");
-
     const order = await db.order.findUnique({ where: { id: orderId } });
     if (!order) throw new Error("Order not found");
 
-    const result = await db.$transaction(async (tx) => {
-      const newStatus =
-        data.action === "ACCEPT"
-          ? "ACCEPTED"
-          : data.action === "REJECT"
-            ? "REJECTED"
-            : "COUNTERED";
+    const isCustomer = actorType === "customer" && order.customerId === actorId;
+    const isOwningSeller = actorType === "seller" && sellerId && order.sellerId === sellerId;
+    if (!isCustomer && !isOwningSeller) {
+      throw new Error("Order not found");
+    }
 
-      await tx.orderNegotiation.update({
-        where: { id: negotiationId },
+    const newStatus =
+      data.action === "ACCEPT"
+        ? "ACCEPTED"
+        : data.action === "REJECT"
+          ? "REJECTED"
+          : "COUNTERED";
+
+    const result = await db.$transaction(async (tx) => {
+      const updateResult = await tx.orderNegotiation.updateMany({
+        where: { id: negotiationId, orderId, status: "PENDING" },
         data: { status: newStatus },
       });
 
+      if (updateResult.count === 0) {
+        throw new Error("Proposal already responded to");
+      }
+
+      const negotiation = await tx.orderNegotiation.findUniqueOrThrow({
+        where: { id: negotiationId },
+      });
+
       if (data.action === "ACCEPT") {
+        const { packing_sla_hours } = await slaConfigService.getSlaConfig();
         await tx.order.update({
           where: { id: orderId },
-          data: { finalAmount: negotiation.proposedPrice, status: "CONFIRMED" },
+          data: {
+            finalAmount: negotiation.proposedPrice,
+            status: "CONFIRMED",
+            packingDeadline: packing_sla_hours
+              ? new Date(Date.now() + packing_sla_hours * 60 * 60 * 1000)
+              : undefined,
+          },
         });
       }
 
@@ -436,10 +596,13 @@ export const orderService = {
         },
       });
 
-      return tx.order.findUnique({
-        where: { id: orderId },
-        include: { negotiations: true },
-      });
+      return {
+        order: await tx.order.findUnique({
+          where: { id: orderId },
+          include: { negotiations: true },
+        }),
+        negotiation,
+      };
     });
 
     // Notify customer on accept
@@ -452,7 +615,7 @@ export const orderService = {
             email: customer.email,
             customerName: customer.name ?? "Customer",
             orderId,
-            finalAmount: Number(negotiation.proposedPrice),
+            finalAmount: Number(result.negotiation.proposedPrice),
           })
           .catch(() => null);
       }
@@ -461,7 +624,7 @@ export const orderService = {
       );
     }
 
-    return result;
+    return result.order;
   },
 
   async assignShopToAddress(
@@ -471,18 +634,25 @@ export const orderService = {
     actorId: string,
     sellerId: string,
   ) {
+    const order = await db.order.findFirst({
+      where: { id: orderId, sellerId },
+    });
+    if (!order) throw new Error("Order not found");
+
     const address = await db.orderAddress.findFirst({
       where: { id: addressId, orderId },
     });
     if (!address) throw new Error("Address not found");
 
-    const shop = await db.shop.findUnique({ where: { id: shopId } });
+    const shop = await db.shop.findFirst({
+      where: { id: shopId, sellerId },
+    });
     if (!shop) throw new Error("Shop not found");
     if (shop.status !== "APPROVED") throw new Error("Shop not approved");
 
     return db.$transaction(async (tx) => {
-      const updated = await tx.orderAddress.update({
-        where: { id: addressId },
+      const updateResult = await tx.orderAddress.updateMany({
+        where: { id: addressId, orderId, fulfillmentStatus: { not: "ASSIGNED" } },
         data: {
           assignedShopId: shopId,
           assignedBy: actorId,
@@ -490,9 +660,23 @@ export const orderService = {
         },
       });
 
+      if (updateResult.count === 0) {
+        throw new Error("Address already assigned");
+      }
+      const orderForDeadline = await tx.order.findUnique({
+        where: { id: orderId },
+        select: { packingDeadline: true },
+      });
+      const { packing_sla_hours } = await slaConfigService.getSlaConfig();
+
       await tx.order.update({
         where: { id: orderId },
-        data: { assignedShopId: shopId },
+        data: {
+          assignedShopId: shopId,
+          ...(!orderForDeadline?.packingDeadline && packing_sla_hours && {
+            packingDeadline: new Date(Date.now() + packing_sla_hours * 60 * 60 * 1000),
+          }),
+        },
       });
 
       await tx.bulkUpload.updateMany({
@@ -512,7 +696,7 @@ export const orderService = {
         },
       });
 
-      return updated;
+      return tx.orderAddress.findUniqueOrThrow({ where: { id: addressId } });
     });
   },
 
@@ -536,6 +720,69 @@ export const orderService = {
     });
   },
 
+  async markPacked(orderId: string, sellerId: string, actorId: string) {
+    const order = await db.order.findFirst({
+      where: { id: orderId, sellerId },
+      include: { addresses: true },
+    });
+    if (!order) throw new Error("Order not found");
+    if (order.status !== "CONFIRMED") {
+      throw new Error(`Cannot mark packed current status is ${order.status}`);
+    }
+    if (!order.assignedShopId) {
+      throw new Error("Order has no shop assigned yet");
+    }
+
+    const address = order.addresses.find((a) => a.assignedShopId === order.assignedShopId)
+      ?? order.addresses[0];
+    if (!address) throw new Error("Order address not found");
+    if (address.assignedShopId && address.assignedShopId !== order.assignedShopId) {
+      throw new Error("Assigned shop does not match the address assignment");
+    }
+
+    const { dispatch_upload_sla_hours } = await slaConfigService.getSlaConfig();
+    const packedAt = new Date();
+    const dispatchDeadline = dispatch_upload_sla_hours
+      ? new Date(packedAt.getTime() + dispatch_upload_sla_hours * 60 * 60 * 1000)
+      : undefined;
+
+    const updateResult = await db.order.updateMany({
+      where: { id: orderId, status: "CONFIRMED" },
+      data: { status: "PACKED", packedAt, dispatchDeadline },
+    });
+    if (updateResult.count === 0) {
+      throw new Error("Order was already packed or its status changed");
+    }
+
+    await db.auditLog.create({
+      data: {
+        sellerId,
+        actorId,
+        actorType: "seller",
+        action: "ORDER_PACKED",
+        entityType: "order",
+        entityId: orderId,
+      },
+    });
+
+    try {
+      await shipmentService.createShipmentForPackedOrder(orderId, sellerId, order.assignedShopId, address.id);
+    } catch (err: any) {
+      await db.auditLog.create({
+        data: {
+          sellerId,
+          actorId: "system",
+          actorType: "system",
+          action: "COURIER_BOOKING_FAILED",
+          entityType: "order",
+          entityId: orderId,
+          metadata: { error: err.message },
+        },
+      });
+    }
+
+    return this.getOrder(orderId, undefined, sellerId);
+  },
   async setCommission(
     actorId: string,
     data: { productId?: string; category?: string; rate: number },
@@ -552,7 +799,7 @@ export const orderService = {
     });
   },
 
-  async getOrder(orderId: string) {
+  async getOrder(orderId: string, requesterId?: string, requesterSellerId?: string) {
     const order = await db.order.findUnique({
       where: { id: orderId },
       include: {
@@ -580,7 +827,14 @@ export const orderService = {
     });
     if (!order) throw new Error("Order not found");
 
-    // Map backend fields to frontend expected field names
+    if (requesterId !== undefined) {
+      const isCustomer = order.customerId === requesterId;
+      const isOwningSeller = requesterSellerId && order.sellerId === requesterSellerId;
+      if (!isCustomer && !isOwningSeller) {
+        throw new Error("Order not found");
+      }
+    }
+
     return {
       ...order,
       shopId: order.assignedShopId,
@@ -618,7 +872,7 @@ export const orderService = {
     },
   ) {
     const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
+    const limit = Math.min(filters.limit ?? 20, 100);
 
     const where: any = { sellerId };
     if (filters.status) where.status = filters.status.toUpperCase();
@@ -675,16 +929,16 @@ export const orderService = {
         })),
         negotiation: latestNeg
           ? {
-              id: latestNeg.id,
-              orderId: latestNeg.orderId,
-              proposedBy:
-                latestNeg.proposedByType === "customer" ? "customer" : "seller",
-              proposedAmount: Number(latestNeg.proposedPrice),
-              message: latestNeg.note ?? undefined,
-              status: latestNeg.status.toLowerCase(),
-              createdAt: latestNeg.createdAt,
-              expiresAt: undefined,
-            }
+            id: latestNeg.id,
+            orderId: latestNeg.orderId,
+            proposedBy:
+              latestNeg.proposedByType === "customer" ? "customer" : "seller",
+            proposedAmount: Number(latestNeg.proposedPrice),
+            message: latestNeg.note ?? undefined,
+            status: latestNeg.status.toLowerCase(),
+            createdAt: latestNeg.createdAt,
+            expiresAt: undefined,
+          }
           : undefined,
       };
     });
@@ -707,7 +961,7 @@ export const orderService = {
     limit?: number;
   }) {
     const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
+    const limit = Math.min(filters.limit ?? 20, 100);
 
     const where: any = {};
     if (filters.status) where.status = filters.status.toUpperCase();
@@ -766,16 +1020,16 @@ export const orderService = {
         })),
         negotiation: latestNeg
           ? {
-              id: latestNeg.id,
-              orderId: latestNeg.orderId,
-              proposedBy:
-                latestNeg.proposedByType === "customer" ? "customer" : "seller",
-              proposedAmount: Number(latestNeg.proposedPrice),
-              message: latestNeg.note ?? undefined,
-              status: latestNeg.status.toLowerCase(),
-              createdAt: latestNeg.createdAt,
-              expiresAt: undefined,
-            }
+            id: latestNeg.id,
+            orderId: latestNeg.orderId,
+            proposedBy:
+              latestNeg.proposedByType === "customer" ? "customer" : "seller",
+            proposedAmount: Number(latestNeg.proposedPrice),
+            message: latestNeg.note ?? undefined,
+            status: latestNeg.status.toLowerCase(),
+            createdAt: latestNeg.createdAt,
+            expiresAt: undefined,
+          }
           : undefined,
       };
     });
@@ -786,27 +1040,40 @@ export const orderService = {
     };
   },
 
-  async cancelOrder(orderId: string, actorId: string, actorType: string) {
+  async cancelOrder(orderId: string, actorId: string, actorType: string, requesterId?: string, requesterSellerId?: string,) {
     const order = await db.order.findUnique({
       where: { id: orderId },
       include: { items: true },
     });
     if (!order) throw new Error("Order not found");
-    if (["DELIVERED", "CANCELLED"].includes(order.status))
-      throw new Error("Order cannot be cancelled");
+
+    if (requesterId !== undefined) {
+      const isCustomer = order.customerId === requesterId;
+      const isOwningSeller = requesterSellerId && order.sellerId === requesterSellerId;
+      if (!isCustomer && !isOwningSeller) {
+        throw new Error("Order not found");
+      }
+    }
 
     const result = await db.$transaction(async (tx) => {
+      const updateResult = await tx.order.updateMany({
+        where: {
+          id: orderId,
+          status: { notIn: ["DELIVERED", "CANCELLED"] },
+        },
+        data: { status: "CANCELLED" },
+      });
+
+      if (updateResult.count === 0) {
+        throw new Error("Order cannot be cancelled");
+      }
+
       for (const item of order.items) {
         await tx.product.update({
           where: { id: item.productId },
           data: { stock: { increment: item.quantity } },
         });
       }
-
-      const updated = await tx.order.update({
-        where: { id: orderId },
-        data: { status: "CANCELLED" },
-      });
 
       await tx.auditLog.create({
         data: {
@@ -819,7 +1086,7 @@ export const orderService = {
         },
       });
 
-      return updated;
+      return tx.order.findUniqueOrThrow({ where: { id: orderId } });
     });
 
     if (order.assignedShopId) {
@@ -843,6 +1110,17 @@ export const orderService = {
     actorId: string,
     data: { orderIds: string[]; action: "confirm" | "cancel" | "ship" },
   ) {
+    const MAX_BULK_ORDERS = 100;
+    if (data.orderIds.length > MAX_BULK_ORDERS) {
+      throw new Error(`Cannot process more than ${MAX_BULK_ORDERS} orders at once`);
+    }
+
+    const VALID_SOURCE_STATUSES: Record<"confirm" | "ship" | "cancel", OrderStatus[]> = {
+      confirm: ["PENDING", "PENDING_ASSIGNMENT", "NEGOTIATING"],
+      ship: ["CONFIRMED", "PROCESSING"],
+      cancel: [],
+    };
+
     const statusMap = {
       confirm: "CONFIRMED",
       cancel: "CANCELLED",
@@ -866,13 +1144,22 @@ export const orderService = {
         if (data.action === "cancel") {
           await this.cancelOrder(orderId, actorId, "seller");
         } else {
-          await db.order.update({
-            where: { id: orderId },
+          const updateResult = await db.order.updateMany({
+            where: {
+              id: orderId,
+              sellerId,
+              status: { in: VALID_SOURCE_STATUSES[data.action] },
+            },
             data: { status: targetStatus },
           });
+          if (updateResult.count === 0) {
+            failed++;
+            continue;
+          }
         }
         success++;
-      } catch {
+      } catch (err: any) {
+        logger.error({ err: err.message, orderId, action: data.action }, "Bulk order action item failed");
         failed++;
       }
     }
@@ -890,6 +1177,11 @@ export const orderService = {
       note?: string;
     },
   ) {
+    const MAX_BULK_ORDERS = 100;
+    if (data.orderIds.length > MAX_BULK_ORDERS) {
+      throw new Error(`Cannot process more than ${MAX_BULK_ORDERS} orders at once`);
+    }
+
     let success = 0,
       failed = 0;
 
@@ -917,6 +1209,7 @@ export const orderService = {
           negotiation.id,
           actorId,
           "seller",
+          sellerId,
           {
             action: data.action,
             counterPrice: data.counterPrice,
@@ -924,7 +1217,8 @@ export const orderService = {
           },
         );
         success++;
-      } catch {
+      } catch (err: any) {
+        logger.error({ err: err.message, orderId }, "Bulk respond negotiation item failed");
         failed++;
       }
     }

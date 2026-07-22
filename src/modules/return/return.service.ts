@@ -73,7 +73,7 @@ export const returnService = {
     return returnRequest;
   },
 
-  async approveReturn(returnId: string, actorId: string, note?: string) {
+  async approveReturn(returnId: string, sellerId: string, actorId: string, note?: string) {
     const returnRequest = await db.returnRequest.findUnique({
       where: { id: returnId },
       include: {
@@ -83,6 +83,7 @@ export const returnService = {
       },
     });
     if (!returnRequest) throw new Error("Return request not found");
+    if (returnRequest.order.sellerId !== sellerId) throw new Error("Return request not found");
     if (returnRequest.status !== "PENDING")
       throw new Error("Return request not pending");
 
@@ -152,6 +153,10 @@ export const returnService = {
         where: { id: returnId },
         data: { status: "APPROVED", approvedBy: actorId, note: note ?? null },
       });
+      await tx.order.update({
+        where: { id: order.id },
+        data: { status: "RETURNED" },
+      });
 
       await tx.returnShipment.create({
         data: {
@@ -202,12 +207,14 @@ export const returnService = {
     return updated;
   },
 
-  async rejectReturn(returnId: string, actorId: string, note: string) {
+  async rejectReturn(returnId: string, sellerId: string, actorId: string, note: string) {
     const returnRequest = await db.returnRequest.findUnique({
       where: { id: returnId },
       include: { order: { select: { sellerId: true } } },
     });
     if (!returnRequest) throw new Error("Return request not found");
+    if (returnRequest.order.sellerId !== sellerId) 
+      throw new Error("Return request not found");
     if (returnRequest.status !== "PENDING")
       throw new Error("Return request not pending");
 
@@ -253,7 +260,7 @@ export const returnService = {
     return updated;
   },
 
-  async getReturnRequest(returnId: string) {
+  async getReturnRequest(returnId: string, sellerId: string) {
     const returnRequest = await db.returnRequest.findUnique({
       where: { id: returnId },
       include: {
@@ -273,6 +280,8 @@ export const returnService = {
       },
     });
     if (!returnRequest) throw new Error("Return request not found");
+
+    if (returnRequest.order.sellerId !== sellerId) throw new Error("Return request not found");
     return returnRequest;
   },
 
@@ -289,7 +298,7 @@ export const returnService = {
     },
   ) {
     const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
+    const limit = Math.min(filters.limit ?? 20, 100);
 
     const where: any = { order: { sellerId } };
     if (filters.status) where.status = filters.status;

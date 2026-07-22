@@ -4,7 +4,17 @@ import { couponService } from "../coupon/coupon.service";
 
 async function getOrCreateCart(userId: string) {
   let cart = await db.cart.findUnique({ where: { userId } });
-  if (!cart) cart = await db.cart.create({ data: { userId } });
+  if (!cart) {
+    try {
+      cart = await db.cart.create({ data: { userId } });
+    } catch (err: any) {
+      if (err.code === "P2002") {
+        cart = await db.cart.findUniqueOrThrow({ where: { userId } });
+      } else {
+        throw err;
+      }
+    }
+  }
   return cart;
 }
 
@@ -91,22 +101,22 @@ export const cartService = {
 
     const availableStock = data.skuId
       ? ((await db.productSKU.findUnique({ where: { id: data.skuId } }))
-          ?.stock ?? 0)
+        ?.stock ?? 0)
       : (product.stock ?? 0);
 
     const existing = data.skuId
       ? await db.cartItem.findUnique({
-          where: {
-            cartId_productId_skuId: {
-              cartId: cart.id,
-              productId: data.productId,
-              skuId: data.skuId,
-            },
+        where: {
+          cartId_productId_skuId: {
+            cartId: cart.id,
+            productId: data.productId,
+            skuId: data.skuId,
           },
-        })
+        },
+      })
       : await db.cartItem.findFirst({
-          where: { cartId: cart.id, productId: data.productId, skuId: null },
-        });
+        where: { cartId: cart.id, productId: data.productId, skuId: null },
+      });
 
     const newQuantity = (existing?.quantity ?? 0) + data.quantity;
     if (newQuantity > availableStock) throw new Error("Insufficient stock");
@@ -175,6 +185,7 @@ export const cartService = {
 
   async checkout(
     userId: string,
+    idempotencyKey: string,
     data: { addressId?: string; newAddress?: any; couponCode?: string },
   ) {
     const { cart, items, subtotal, sellerId } = await getCartWithItems(userId);
@@ -194,22 +205,9 @@ export const cartService = {
       throw new Error("Delivery address required");
     }
 
-    let discount = 0;
-    let couponId: string | null = null;
-    if (data.couponCode) {
-      const result = await couponService.validateCoupon(
-        data.couponCode,
-        userId,
-        subtotal,
-        items.map((i) => i.productId),
-      );
-      discount = result.discount;
-      couponId = result.coupon.id;
-    }
-
-    const order = await orderService.createOrder(userId, {
+    const buildOrderInput = (discount: number, couponCode?: string) => ({
       sellerId,
-      type: "STANDARD",
+      type: "STANDARD" as const,
       items: items.map((i) => ({
         productId: i.productId,
         quantity: i.quantity,
@@ -228,12 +226,23 @@ export const cartService = {
           ? Number(deliveryAddress.longitude)
           : undefined,
       },
+      discountAmount: discount > 0 ? discount : undefined,
+      couponCode,
     });
 
-    if (couponId && discount > 0) {
-      await couponService
-        .applyCoupon(couponId, userId, order.id, discount)
-        .catch(() => null);
+    let order;
+    if (data.couponCode) {
+      const result = await couponService.checkoutWithCoupon(
+        data.couponCode,
+        userId,
+        subtotal,
+        items.map((i) => i.productId),
+        (discount, couponCode) =>
+          orderService.createOrder(userId, idempotencyKey, buildOrderInput(discount, couponCode)),
+      );
+      order = result.order;
+    } else {
+      order = await orderService.createOrder(userId, idempotencyKey, buildOrderInput(0));
     }
 
     await db.cartItem.deleteMany({ where: { cartId: cart.id } });

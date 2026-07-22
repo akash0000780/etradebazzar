@@ -3,6 +3,9 @@ import { analyticsService } from "./analytics.service";
 import { logger } from "../../utils/logger";
 import type { ViewName } from "../../lib/analytics/analytics.registry";
 
+const MAX_LIMIT = 100;
+const getLimit = (req: Request): number => Math.min(Number(req.query["limit"]) || 10, MAX_LIMIT);
+
 export const analyticsController = {
     // Seller
     async getSellerAnalytics(req: Request, res: Response) {
@@ -42,7 +45,7 @@ export const analyticsController = {
     async getSellerTopProducts(req: Request, res: Response) {
         try {
             const sellerId = req.seller!.id;
-            const limit = Number(req.query["limit"]) || 10;
+            const limit = getLimit(req);
             const result = await analyticsService.getSellerTopProducts(sellerId, limit);
             return res.json({ success: true, data: result });
         } catch (error: any) {
@@ -80,7 +83,7 @@ export const analyticsController = {
 
     async getTopSellers(req: Request, res: Response) {
         try {
-            const limit = Number(req.query["limit"]) || 10;
+            const limit = getLimit(req);
             const result = await analyticsService.getTopSellers(limit);
             return res.json({ success: true, data: result });
         } catch (error: any) {

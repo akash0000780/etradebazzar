@@ -13,8 +13,8 @@ export const createShopSchema = z.object({
     contactPhone: z.string().regex(/^\+?[6-9]\d{9}$/, "Invalid phone number"),
     returnPolicy: z.string().optional(),
     pickupStreet: z.string().min(5),
-    pickupCity: z.string().min(2),
-    pickupState: z.string().min(2),
+    pickupCity: z.string().min(2).optional(),
+    pickupState: z.string().min(2).optional(),
     pickupPincode: z.string().regex(/^\d{6}$/, "Invalid pincode"),
   }),
 });

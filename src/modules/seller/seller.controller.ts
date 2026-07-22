@@ -29,6 +29,9 @@ export const sellerController = {
       if (error.message === "Email already registered") {
         return res.status(409).json({ success: false, error: error.message });
       }
+      if (error.message.includes("could not be determined from the provided pincode")) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
       return res
         .status(500)
         .json({ success: false, error: "Internal server error" });
@@ -58,11 +61,34 @@ export const sellerController = {
       return res.status(201).json({ success: true, data: result });
     } catch (error: any) {
       logger.error({ err: error.message }, "Bank detail submission failed");
-      const clientErrors = ["Bank detail already added"];
+      const clientErrors = ["Bank detail already added", "Seller not found"];
       if (
         clientErrors.includes(error.message) ||
         error.message.includes("Account number") ||
-        error.message.includes("IFSC")
+        error.message.includes("IFSC") ||
+        error.message.includes("Bank account verification failed")
+      ) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  },
+
+  async updateBankDetail(req: Request, res: Response) {
+    try {
+      const sellerId = req.seller!.id;
+      const result = await sellerService.updateBankDetail(sellerId, req.body);
+      return res.json({ success: true, data: result });
+    } catch (error: any) {
+      logger.error({ err: error.message }, "Bank detail update failed");
+      const clientErrors = ["Bank detail not found", "Seller not found"];
+      if (
+        clientErrors.includes(error.message) ||
+        error.message.includes("Account number") ||
+        error.message.includes("IFSC") ||
+        error.message.includes("Bank account verification failed")
       ) {
         return res.status(400).json({ success: false, error: error.message });
       }
@@ -97,7 +123,7 @@ export const sellerController = {
       return res.status(201).json({ success: true, data: result });
     } catch (error: any) {
       logger.error({ err: error.message }, "Seller invite failed");
-      if (error.message === "Seller with this email already exists") {
+      if (error.message === "Seller with this email already exists" || error.message === "Invite already pending for this email") {
         return res.status(409).json({ success: false, error: error.message });
       }
       return res
@@ -117,6 +143,7 @@ export const sellerController = {
         "Invalid invite token",
         "Invite already used",
         "Invite expired",
+        "City and state could not be determined from the provided pincode. Please provide them manually.",
       ];
       if (clientErrors.includes(error.message)) {
         return res.status(400).json({ success: false, error: error.message });
@@ -330,7 +357,12 @@ export const sellerController = {
       return res.json({ success: true, data: result });
     } catch (error: any) {
       logger.error({ err: error.message }, "Verify KYC failed");
-      const clientErrors = ["KYC not found", "KYC already verified"];
+      const clientErrors = [
+        "KYC not found",
+        "KYC already verified",
+        "Aadhaar must be verified before overall KYC can be verified",
+        "Government ID must be verified before overall KYC can be verified",
+      ];
       if (clientErrors.includes(error.message)) {
         return res.status(400).json({ success: false, error: error.message });
       }
@@ -354,6 +386,49 @@ export const sellerController = {
     } catch (error: any) {
       logger.error({ err: error.message }, "Reject KYC failed");
       const clientErrors = ["KYC not found", "Cannot reject verified KYC"];
+      if (clientErrors.includes(error.message)) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  },
+
+  async reverifyBankDetail(req: Request, res: Response) {
+    try {
+      const { sellerId } = req.params;
+      const actorId = req.user!.id;
+      const result = await sellerService.reverifyBankDetail(sellerId as string, actorId);
+      return res.json({ success: true, data: result });
+    } catch (error: any) {
+      logger.error({ err: error.message }, "Bank detail reverification failed");
+      const clientErrors = ["Bank detail not found", "Seller not found"];
+      if (
+        clientErrors.includes(error.message) ||
+        error.message.includes("Bank account verification failed")
+      ) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
+    }
+  },
+
+  async overrideBankVerification(req: Request, res: Response) {
+    try {
+      const { sellerId } = req.params;
+      const actorId = req.user!.id;
+      const result = await sellerService.overrideBankVerification(
+        sellerId as string,
+        actorId,
+        req.body,
+      );
+      return res.json({ success: true, data: result });
+    } catch (error: any) {
+      logger.error({ err: error.message }, "Bank verification override failed");
+      const clientErrors = ["Bank detail not found"];
       if (clientErrors.includes(error.message)) {
         return res.status(400).json({ success: false, error: error.message });
       }

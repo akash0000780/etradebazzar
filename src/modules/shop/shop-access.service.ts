@@ -1,4 +1,5 @@
 import { db } from "../../db/index";
+import { withTenantScope } from "../../middleware/tenant";
 
 const UNRESTRICTED_ROLES = ["owner", "manager"];
 
@@ -10,12 +11,12 @@ export const shopAccessService = {
             throw new Error("Owner/manager roles already have access to all shops");
         }
 
-        if (shopIds.length) {
-            const validShops = await db.shop.count({ where: { id: { in: shopIds }, sellerId } });
-            if (validShops !== shopIds.length) throw new Error("One or more shops not found");
-        }
+        return withTenantScope(async (tx) => {
+            if (shopIds.length) {
+                const validShops = await tx.shop.count({ where: { id: { in: shopIds }, sellerId } });
+                if (validShops !== shopIds.length) throw new Error("One or more shops not found");
+            }
 
-        return db.$transaction(async (tx) => {
             await tx.shopAccess.deleteMany({ where: { memberId } });
             if (shopIds.length) {
                 await tx.shopAccess.createMany({
@@ -39,7 +40,9 @@ export const shopAccessService = {
         if (!member) throw new Error("Member not found");
 
         if (UNRESTRICTED_ROLES.includes(member.role.name)) {
-            const allShops = await db.shop.findMany({ where: { sellerId }, select: { id: true, name: true } });
+            const allShops = await withTenantScope((tx) =>
+                tx.shop.findMany({ where: { sellerId }, select: { id: true, name: true } })
+            );
             return { unrestricted: true, shops: allShops };
         }
 

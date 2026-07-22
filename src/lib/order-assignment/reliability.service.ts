@@ -43,4 +43,47 @@ export const reliabilityService = {
             logger.error({ err: err.message, shopId }, "Reliability recompute failed");
         }
     },
+
+    async applySlaBreachPenalty(
+        shopId: string,
+        orderId: string,
+        breachType: "PACKING_SLA_BREACHED" | "DISPATCH_SLA_BREACHED",
+        penaltyPoints: number,
+    ) {
+        try {
+            await db.$transaction(async (tx) => {
+                const shop = await tx.shop.findUnique({
+                    where: { id: shopId },
+                    select: { reliabilityScore: true, slaBreachCount: true },
+                });
+                if (!shop) return;
+
+                const newScore = Math.max(0, Number(shop.reliabilityScore) - penaltyPoints);
+
+                await tx.shop.update({
+                    where: { id: shopId },
+                    data: {
+                        reliabilityScore: newScore,
+                        slaBreachCount: { increment: 1 },
+                        autoAssignEnabled: false,
+                    },
+                });
+
+                await tx.auditLog.create({
+                    data: {
+                        actorId: shopId,
+                        actorType: "system",
+                        action: breachType,
+                        entityType: "order",
+                        entityId: orderId,
+                        metadata: { shopId, penaltyPoints, newScore },
+                    },
+                });
+            });
+
+            logger.warn({ shopId, orderId, breachType, penaltyPoints }, "SLA breach penalty applied");
+        } catch (err: any) {
+            logger.error({ err: err.message, shopId, orderId }, "Failed to apply SLA breach penalty");
+        }
+    },
 };

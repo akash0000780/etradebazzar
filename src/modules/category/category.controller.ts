@@ -12,6 +12,7 @@ export const categoryController = {
       const clientErrors = [
         "Category already exists",
         "Parent category not found",
+        "Duplicate attribute key in request",
       ];
       if (clientErrors.includes(error.message)) {
         return res.status(400).json({ success: false, error: error.message });
@@ -36,6 +37,7 @@ export const categoryController = {
         "Category not found",
         "Parent category not found",
         "Category cannot be its own parent",
+        "Duplicate attribute key in request",
       ];
       if (clientErrors.includes(error.message)) {
         return res.status(400).json({ success: false, error: error.message });

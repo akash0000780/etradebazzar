@@ -10,7 +10,7 @@
     "db:push": "prisma db push && bun src/db/migrate.ts",
     "db:studio": "prisma studio",
     "db:generate": "prisma generate",
-    "db:seed": "bun src/db/seed-comprehensive.ts",
+    "db:seed": "bun script/seed-comprehensive.ts",
     "db:create-seqs": "bun src/db/create-sequences.ts"
   },
   "dependencies": {

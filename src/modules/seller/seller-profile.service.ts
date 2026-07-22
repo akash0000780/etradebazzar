@@ -77,8 +77,8 @@ export const sellerProfileService = {
     },
 
     //Shop statistics 
-    async getShopStats(shopId: string) {
-        const shop = await db.shop.findUnique({ where: { id: shopId } });
+    async getShopStats(sellerId: string, shopId: string) {
+        const shop = await db.shop.findFirst({ where: { id: shopId, sellerId } });
         if (!shop) throw new Error("Shop not found");
 
         const now = new Date();

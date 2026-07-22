@@ -10,29 +10,50 @@ import type {
 } from "./shipment.interface";
 import crypto from "crypto";
 
+function timingSafeEqualStr(a: string, b: string): boolean {
+    const bufA = Buffer.from(a, "utf8");
+    const bufB = Buffer.from(b, "utf8");
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export class ShiprocketInstance implements ShipmentProvider {
     private token: string | null = null;
     private tokenExpiry: Date | null = null;
     private baseUrl = config.shiprocketBaseUrl;
+    private tokenRefreshPromise: Promise<string> | null = null;
 
     private async getToken(): Promise<string> {
         if (this.token && this.tokenExpiry && this.tokenExpiry > new Date()) {
             return this.token;
         }
-        const res = await fetch(`${this.baseUrl}/auth/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                email: config.shiprocketEmail,
-                password: config.shiprocketPassword,
-            }),
-        });
-        if (!res.ok) throw new Error("Shiprocket auth failed");
-        const data = (await res.json()) as { token: string };
-        this.token = data.token;
-        this.tokenExpiry = new Date(Date.now() + 9 * 24 * 60 * 60 * 1000);
-        logger.info("Shiprocket token refreshed");
-        return this.token;
+
+        if (this.tokenRefreshPromise) {
+            return this.tokenRefreshPromise;
+        }
+
+        this.tokenRefreshPromise = (async () => {
+            try {
+                const res = await fetch(`${this.baseUrl}/auth/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        email: config.shiprocketEmail,
+                        password: config.shiprocketPassword,
+                    }),
+                });
+                if (!res.ok) throw new Error("Shiprocket auth failed");
+                const data = (await res.json()) as { token: string };
+                this.token = data.token;
+                this.tokenExpiry = new Date(Date.now() + 9 * 24 * 60 * 60 * 1000);
+                logger.info("Shiprocket token refreshed");
+                return this.token;
+            } finally {
+                this.tokenRefreshPromise = null;
+            }
+        })();
+
+        return this.tokenRefreshPromise;
     }
 
     private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -157,21 +178,28 @@ export class ShiprocketInstance implements ShipmentProvider {
         };
     }
 
-    verifyWebhook(payload: any, signature: string): boolean {
+    verifyWebhook(payload: Buffer | string, signature: string): boolean {
+        const rawBody = Buffer.isBuffer(payload) ? payload.toString("utf8") : payload;
+
         const expected = crypto
             .createHmac("sha256", config.shiprocketWebhookSecret)
-            .update(JSON.stringify(payload))
+            .update(rawBody)
             .digest("hex");
-        return expected === signature;
+
+        return timingSafeEqualStr(expected, signature);
     }
 
-    parseWebhookEvent(payload: any): WebhookEvent {
+    parseWebhookEvent(payload: Buffer | string): WebhookEvent {
+        const parsed = typeof payload === "string" || Buffer.isBuffer(payload)
+            ? JSON.parse(payload.toString("utf8"))
+            : payload;
+
         return {
-            event: payload.event ?? "unknown",
-            trackingId: payload.awb ?? "",
-            status: payload.current_status ?? "unknown",
-            orderId: payload.order_id,
-            raw: payload,
+            event: parsed.event ?? "unknown",
+            trackingId: parsed.awb ?? "",
+            status: parsed.current_status ?? "unknown",
+            orderId: parsed.order_id,
+            raw: parsed,
         };
     }
 }

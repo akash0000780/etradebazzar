@@ -7,6 +7,7 @@ const orderItemSchema = z.object({
 
 export const createOrderSchema = z.object({
     body: z.object({
+        idempotencyKey: z.string().uuid("idempotencyKey must be a valid UUID"),
         sellerId: z.string(),
         type: z.enum(["STANDARD", "SAMPLE"]),
         items: z.array(orderItemSchema).min(1),
@@ -23,6 +24,13 @@ export const createOrderSchema = z.object({
     }),
 });
 
+export const createBulkOrderSchema = z.object({
+    body: z.object({
+        idempotencyKey: z.string().uuid("idempotencyKey must be a valid UUID"),
+        sellerId: z.string(),
+        items: z.array(orderItemSchema).min(1),
+    }),
+});
 
 export const submitProposalSchema = z.object({
     params: z.object({
@@ -104,4 +112,22 @@ export const bulkRespondNegotiationsSchema = z.object({
         counterPrice: z.number().positive().optional(),
         note: z.string().optional(),
     }),
+});
+
+export const listAllOrdersSchema = z.object({
+    query: z.object({
+        status: z.string().optional(),
+        search: z.string().optional(),
+        type: z.string().optional(),
+        sellerId: z.string().optional(),
+        shopId: z.string().optional(),
+        dateFrom: z.string().datetime().optional(),
+        dateTo: z.string().datetime().optional(),
+        page: z.coerce.number().int().positive().optional(),
+        limit: z.coerce.number().int().positive().max(100).optional(),
+    }),
+});
+
+export const markPackedSchema = z.object({
+    params: z.object({ orderId: z.string() }),
 });

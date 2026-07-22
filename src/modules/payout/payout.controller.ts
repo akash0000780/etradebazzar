@@ -109,7 +109,10 @@ export const payoutController = {
         "No unpaid orders to payout",
         "Net payout amount must be greater than 0",
       ];
-      if (clientErrors.includes(error.message)) {
+      if (
+        clientErrors.includes(error.message) ||
+        error.message.includes("Seller bank account is not verified")
+      ) {
         return res.status(400).json({ success: false, error: error.message });
       }
       return res

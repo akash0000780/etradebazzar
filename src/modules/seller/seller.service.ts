@@ -7,8 +7,13 @@ import {
   lookupIfsc,
 } from "../../lib/bank/bank.validator";
 import { assignDefaultRolePermissions } from "../../lib/permission/permission.service";
+import { PincodeFactory } from "../../lib/location/pincode.factory";
+import { logger } from "../../utils/logger";
 import bcrypt from "bcryptjs";
 import { StorageFactory } from "../../lib/storage/storage.factory";
+import { BankVerificationFactory } from "../../lib/bank-verification/bank-verification.factory";
+import { computeNameMatchScore, NAME_MATCH_THRESHOLD } from "../../lib/bank-verification/name-match";
+import { maskAccountNumber } from "../../utils/mask";
 
 const DEFAULT_SELLER_ROLES = ["owner", "manager", "staff"];
 
@@ -29,6 +34,45 @@ function extractStorageKey(value: string): string {
   }
 }
 
+async function runBankVerification(
+  seller: { name: string; email: string; phone: string },
+  data: { accountHolderName: string; accountNumber: string; ifscCode: string },
+): Promise<{
+  verificationStatus: "VERIFIED" | "NAME_MISMATCH";
+  verifiedAccountHolderName: string | null;
+  verifiedAt: Date;
+  verificationProvider: string;
+  nameMatchScore: number | null;
+  fundAccountId: string | null;
+}> {
+  const providerKey = process.env["BANK_VERIFICATION_PROVIDER"] ?? "sandbox";
+  const provider = await BankVerificationFactory.get();
+
+  const result = await provider.verifyBankAccount({
+    accountHolderName: data.accountHolderName,
+    accountNumber: data.accountNumber,
+    ifscCode: data.ifscCode,
+    contactName: seller.name,
+    contactEmail: seller.email,
+    contactPhone: seller.phone,
+  });
+
+  if (result.outcome === "FAILED") {
+    throw new Error(
+      `Bank account verification failed: ${result.failureReason ?? "account could not be verified"}`
+    );
+  }
+
+  return {
+    verificationStatus: result.outcome,
+    verifiedAccountHolderName: result.verifiedAccountHolderName,
+    verifiedAt: new Date(),
+    verificationProvider: providerKey,
+    nameMatchScore: result.nameMatchScore,
+    fundAccountId: result.fundAccountId,
+  };
+}
+
 async function resolveKycDocumentUrls(kyc: { documents: string[] } | null) {
   if (!kyc || !kyc.documents?.length) return kyc;
   const storage = StorageFactory.get();
@@ -43,6 +87,32 @@ async function resolveKycDocumentUrls(kyc: { documents: string[] } | null) {
   );
   return { ...kyc, documents: signedDocuments };
 }
+
+async function resolveAddressCityState(address: {
+  street: string; city?: string; state?: string; pincode: string;
+}): Promise<{ street: string; city: string; state: string; pincode: string }> {
+  let city = address.city;
+  let state = address.state;
+
+  if ((!city || !state) && address.pincode) {
+    try {
+      const pincodeProvider = PincodeFactory.get();
+      const pincodeDetails = await pincodeProvider.lookupByPincode(address.pincode);
+
+      if (!city) city = pincodeDetails.city;
+      if (!state) state = pincodeDetails.state;
+    } catch (error: any) {
+      logger.warn({ err: error.message, pincode: address.pincode }, "Failed to auto-fill city/state from pincode");
+    }
+  }
+
+  if (!city || !state) {
+    throw new Error("City and state could not be determined from the provided pincode. Please provide them manually.");
+  }
+
+  return { street: address.street, city, state, pincode: address.pincode };
+}
+
 export const sellerService = {
   async register(data: {
     name: string;
@@ -51,11 +121,12 @@ export const sellerService = {
     phone: string;
     businessName: string;
     businessType: "INDIVIDUAL" | "COMPANY" | "PARTNERSHIP";
-    address: { street: string; city: string; state: string; pincode: string };
+    address: { street: string; city?: string; state?: string; pincode: string };
   }) {
     const existing = await db.user.findUnique({ where: { email: data.email } });
     if (existing) throw new Error("Email already registered");
 
+    const address = await resolveAddressCityState(data.address);
     const hashedPassword = await bcrypt.hash(data.password, 12);
 
     return db.$transaction(async (tx) => {
@@ -77,10 +148,10 @@ export const sellerService = {
           phone: data.phone,
           businessName: data.businessName,
           businessType: data.businessType,
-          street: data.address.street,
-          city: data.address.city,
-          state: data.address.state,
-          pincode: data.address.pincode,
+          street: address.street,
+          city: address.city,
+          state: address.state,
+          pincode: address.pincode,
           status: "PENDING",
         },
       });
@@ -169,6 +240,14 @@ export const sellerService = {
     const ifscResult = await lookupIfsc(data.ifscCode);
     if (!ifscResult.verified) throw new Error(ifscResult.message);
 
+    const seller = await db.seller.findUnique({
+      where: { id: sellerId },
+      select: { name: true, email: true, phone: true },
+    });
+    if (!seller) throw new Error("Seller not found");
+
+    const verification = await runBankVerification(seller, data);
+
     return db.sellerBankDetail.create({
       data: {
         sellerId,
@@ -176,8 +255,82 @@ export const sellerService = {
         accountNumber: encrypt(data.accountNumber),
         ifscCode: data.ifscCode,
         bankName: data.bankName || ifscResult.bankName || "",
+        ...verification,
       },
     });
+  },
+
+  async updateBankDetail(
+    sellerId: string,
+    data: Partial<{
+      accountHolderName: string;
+      accountNumber: string;
+      ifscCode: string;
+      bankName: string;
+    }>,
+  ) {
+    const existing = await db.sellerBankDetail.findUnique({ where: { sellerId } });
+    if (!existing) throw new Error("Bank detail not found");
+
+    const existingAccountNumber = decrypt(existing.accountNumber);
+    const nextAccountNumber = data.accountNumber ?? existingAccountNumber;
+    const nextIfscCode = data.ifscCode ?? existing.ifscCode;
+    const nextAccountHolderName = data.accountHolderName ?? existing.accountHolderName;
+
+    const accountNumberChanging = nextAccountNumber !== existingAccountNumber;
+    const ifscChanging = nextIfscCode !== existing.ifscCode;
+
+    const updateData: any = {};
+    if (data.accountHolderName !== undefined) updateData.accountHolderName = data.accountHolderName;
+    if (data.bankName !== undefined) updateData.bankName = data.bankName;
+
+    if (accountNumberChanging || ifscChanging) {
+      const accountCheck = validateAccountNumber(nextAccountNumber);
+      if (!accountCheck.valid) throw new Error(accountCheck.error);
+
+      const ifscResult = await lookupIfsc(nextIfscCode);
+      if (!ifscResult.verified) throw new Error(ifscResult.message);
+
+      const seller = await db.seller.findUnique({
+        where: { id: sellerId },
+        select: { name: true, email: true, phone: true },
+      });
+      if (!seller) throw new Error("Seller not found");
+
+      if (existing.fundAccountId) {
+        try {
+          const provider = await BankVerificationFactory.get();
+          await provider.deactivateFundAccount(existing.fundAccountId);
+        } catch (error: any) {
+          logger.warn(
+            { err: error.message, sellerId, fundAccountId: existing.fundAccountId },
+            "Failed to deactivate previous bank verification fund account",
+          );
+        }
+      }
+
+      const verification = await runBankVerification(seller, {
+        accountHolderName: nextAccountHolderName,
+        accountNumber: nextAccountNumber,
+        ifscCode: nextIfscCode,
+      });
+
+      updateData.accountNumber = encrypt(nextAccountNumber);
+      updateData.ifscCode = nextIfscCode;
+      if (data.bankName === undefined) updateData.bankName = ifscResult.bankName || existing.bankName;
+      Object.assign(updateData, verification);
+    } else if (data.accountHolderName !== undefined && data.accountHolderName !== existing.accountHolderName) {
+      // Only the submitted name changed, not the account/IFSC - re-check the
+      // match locally against the already-verified bank name instead of
+      // paying for another ₹1 penny-drop.
+      if (existing.verifiedAccountHolderName) {
+        const score = computeNameMatchScore(data.accountHolderName, existing.verifiedAccountHolderName);
+        updateData.nameMatchScore = score;
+        updateData.verificationStatus = score >= NAME_MATCH_THRESHOLD ? "VERIFIED" : "NAME_MISMATCH";
+      }
+    }
+
+    return db.sellerBankDetail.update({ where: { sellerId }, data: updateData });
   },
 
   async getBankDetail(sellerId: string) {
@@ -185,12 +338,17 @@ export const sellerService = {
       where: { sellerId },
     });
     if (!detail) return null;
-    return { ...detail, accountNumber: decrypt(detail.accountNumber) };
+    const { fundAccountId: _fundAccountId, ...rest } = detail;
+    return { ...rest, accountNumber: decrypt(detail.accountNumber) };
   },
 
   async inviteSeller(actorId: string, email: string) {
     const existing = await db.seller.findUnique({ where: { email } });
     if (existing) throw new Error("Seller with this email already exists");
+    const existingInvite = await db.sellerInvite.findFirst({
+      where: { email, status: "PENDING" },
+    });
+    if (existingInvite) throw new Error("Invite already pending for this email");
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     const invite = await db.sellerInvite.create({ data: { email, expiresAt } });
@@ -217,7 +375,7 @@ export const sellerService = {
       phone: string;
       businessName: string;
       businessType: "INDIVIDUAL" | "COMPANY" | "PARTNERSHIP";
-      address: { street: string; city: string; state: string; pincode: string };
+      address: { street: string; city?: string; state?: string; pincode: string };
     },
   ) {
     const invite = await db.sellerInvite.findUnique({ where: { token } });
@@ -231,6 +389,7 @@ export const sellerService = {
       throw new Error("Invite expired");
     }
 
+    const address = await resolveAddressCityState(data.address);
     const hashedPassword = await bcrypt.hash(data.password, 12);
 
     return db.$transaction(async (tx) => {
@@ -256,10 +415,10 @@ export const sellerService = {
           phone: data.phone,
           businessName: data.businessName,
           businessType: data.businessType,
-          street: data.address.street,
-          city: data.address.city,
-          state: data.address.state,
-          pincode: data.address.pincode,
+          street: address.street,
+          city: address.city,
+          state: address.state,
+          pincode: address.pincode,
           invitedBy: invite.id,
         },
       });
@@ -635,17 +794,124 @@ export const sellerService = {
             createdAt: true,
           },
         },
+        bankDetail: {
+          select: {
+            accountHolderName: true,
+            accountNumber: true,
+            ifscCode: true,
+            bankName: true,
+            verificationStatus: true,
+            verifiedAccountHolderName: true,
+            verifiedAt: true,
+            verificationProvider: true,
+            nameMatchScore: true,
+          },
+        },
       },
     });
 
     if (!seller) return null;
 
-    return { ...seller, kyc: await resolveKycDocumentUrls(seller.kyc) };
+    return {
+      ...seller,
+      kyc: await resolveKycDocumentUrls(seller.kyc),
+      bankDetail: seller.bankDetail
+        ? { ...seller.bankDetail, accountNumber: maskAccountNumber(decrypt(seller.bankDetail.accountNumber)) }
+        : null,
+    };
   },
+
+  async reverifyBankDetail(sellerId: string, actorId: string) {
+    const existing = await db.sellerBankDetail.findUnique({ where: { sellerId } });
+    if (!existing) throw new Error("Bank detail not found");
+
+    const seller = await db.seller.findUnique({
+      where: { id: sellerId },
+      select: { name: true, email: true, phone: true },
+    });
+    if (!seller) throw new Error("Seller not found");
+
+    if (existing.fundAccountId) {
+      try {
+        const provider = await BankVerificationFactory.get();
+        await provider.deactivateFundAccount(existing.fundAccountId);
+      } catch (error: any) {
+        logger.warn(
+          { err: error.message, sellerId, fundAccountId: existing.fundAccountId },
+          "Failed to deactivate previous bank verification fund account",
+        );
+      }
+    }
+
+    const verification = await runBankVerification(seller, {
+      accountHolderName: existing.accountHolderName,
+      accountNumber: decrypt(existing.accountNumber),
+      ifscCode: existing.ifscCode,
+    });
+
+    const updated = await db.sellerBankDetail.update({
+      where: { sellerId },
+      data: verification,
+    });
+
+    await db.auditLog.create({
+      data: {
+        sellerId,
+        actorId,
+        actorType: "platform",
+        action: "BANK_DETAIL_REVERIFIED",
+        entityType: "seller_bank_detail",
+        entityId: existing.id,
+        metadata: { verificationStatus: verification.verificationStatus },
+      },
+    });
+
+    return updated;
+  },
+
+  async overrideBankVerification(
+    sellerId: string,
+    actorId: string,
+    data: { verificationStatus: "VERIFIED" | "NAME_MISMATCH" | "FAILED"; reason: string },
+  ) {
+    const existing = await db.sellerBankDetail.findUnique({ where: { sellerId } });
+    if (!existing) throw new Error("Bank detail not found");
+
+    const updated = await db.sellerBankDetail.update({
+      where: { sellerId },
+      data: {
+        verificationStatus: data.verificationStatus,
+        verificationProvider: "manual_override",
+        verifiedAt: new Date(),
+      },
+    });
+
+    await db.auditLog.create({
+      data: {
+        sellerId,
+        actorId,
+        actorType: "platform",
+        action: "BANK_VERIFICATION_OVERRIDDEN",
+        entityType: "seller_bank_detail",
+        entityId: existing.id,
+        metadata: { verificationStatus: data.verificationStatus, reason: data.reason },
+      },
+    });
+
+    return updated;
+  },
+
   async verifyKyc(sellerId: string, actorId: string) {
     const kyc = await db.sellerKyc.findUnique({ where: { sellerId } });
     if (!kyc) throw new Error("KYC not found");
     if (kyc.status === "VERIFIED") throw new Error("KYC already verified");
+
+    if (kyc.aadhaarStatus !== "VERIFIED") {
+      throw new Error("Aadhaar must be verified before overall KYC can be verified");
+    }
+    if (kyc.govtIdType && kyc.govtIdStatus !== "VERIFIED") {
+      throw new Error("Government ID must be verified before overall KYC can be verified");
+    }
 
     const [updated, owner, seller] = await Promise.all([
       db.$transaction(async (tx) => {
@@ -845,6 +1111,9 @@ export const sellerService = {
       throw new Error("Cannot remove the owner");
 
     await db.sellerMember.delete({ where: { id: memberId } });
+
+    await redis.del(RedisKeys.userRoles(member.userId, sellerId));
+    await redis.del(RedisKeys.userPermissions(member.userId, sellerId));
 
     await db.auditLog.create({
       data: {

@@ -6,8 +6,7 @@ import { productVariantController } from "./product-variant.controller";
 import { productSearchController } from "./product-search.controller";
 import { productBulkController } from "./product-bulk.controller";
 import { protect } from "../../middleware/auth";
-import { resolveTenant, setPlatformAdmin } from "../../middleware/tenant";
-import { requirePlatformRole } from "../../middleware/rbac";
+import { resolveTenant, requirePlatformAdmin } from "../../middleware/tenant";
 import { requirePermission } from "../../middleware/permission";
 import { PERMISSIONS } from "../../lib/permission/permission.constants";
 import { validate } from "../../utils/validate";
@@ -71,24 +70,22 @@ router.get(
   "/pending",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "product_reviewer"),
+  requirePlatformAdmin("super_admin", "product_reviewer"),
   productController.listPendingProducts,
 );
 router.get(
   "/all",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "product_reviewer"),
+  requirePlatformAdmin("super_admin", "product_reviewer"),
   productController.listAllProducts,
 );
 router.get(
   "/details/:productId",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "product_reviewer"),
+  requirePlatformAdmin("super_admin", "product_reviewer"),
+  validate(productParamSchema),
   productController.getProductById,
 );
 
@@ -97,8 +94,7 @@ router.patch(
   "/:productId/approve",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "product_reviewer"),
+  requirePlatformAdmin("super_admin", "product_reviewer"),
   validate(reviewProductSchema),
   productController.approveProduct,
 );
@@ -106,8 +102,7 @@ router.patch(
   "/:productId/reject",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "product_reviewer"),
+  requirePlatformAdmin("super_admin", "product_reviewer"),
   validate(rejectProductSchema),
   productController.rejectProduct,
 );

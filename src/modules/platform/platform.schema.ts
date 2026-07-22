@@ -44,3 +44,13 @@ export const platformRoleParamSchema = z.object({
     roleId: z.string(),
   }),
 });
+
+export const getAuditLogsSchema = z.object({
+  query: z.object({
+    sellerId: z.string().optional(),
+    actorId: z.string().optional(),
+    action: z.string().optional(),
+    page: z.string().regex(/^\d+$/, "Invalid page").optional(),
+    limit: z.string().regex(/^\d+$/, "Invalid limit").optional(),
+  }),
+});

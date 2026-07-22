@@ -36,8 +36,8 @@ export const printAreaController = {
         try {
             const sellerId = req.seller!.id;
             const { productId } = req.params;
-            await printAreaService.deletePrintArea(sellerId, productId as string);
-            return res.json({ success: true, data: { deleted: true } });
+            const result = await printAreaService.deletePrintArea(sellerId, productId as string);
+            return res.json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Delete print area failed");
             if (error.message === "Product not found") {

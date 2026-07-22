@@ -14,9 +14,10 @@ export const paymentController = {
                 "Order not found",
                 "Order not in payable state",
                 "Advance payment already initiated",
+                "Payment initiation already in progress, please wait",
             ];
             if (clientErrors.includes(error.message)) {
-                return res.status(400).json({ success: false, error: error.message });
+                return res.status(409).json({ success: false, error: error.message });
             }
             return res.status(500).json({ success: false, error: "Internal server error" });
         }
@@ -43,12 +44,18 @@ export const paymentController = {
 
     async verifyPayment(req: Request, res: Response) {
         try {
-            const result = await paymentService.verifyAndCapturePayment(req.body);
+            const result = await paymentService.verifyAndCapturePayment(req.body, {
+                userId: req.user?.id,
+                sellerId: req.seller?.id,
+            });
             return res.json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Verify payment failed");
             if (error.message === "Invalid payment signature") {
                 return res.status(400).json({ success: false, error: error.message });
+            }
+            if (error.message === "Order not found" || error.message === "Payment does not belong to this order") {
+                return res.status(404).json({ success: false, error: "Order not found" });
             }
             return res.status(500).json({ success: false, error: "Internal server error" });
         }

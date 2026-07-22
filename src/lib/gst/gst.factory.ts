@@ -9,6 +9,11 @@ class GstFactory {
 
     static get(): GstProvider {
         const key = (process.env["GST_PROVIDER"] ?? "sandbox") as GstProviderType;
+        if (key === "sandbox" && process.env.NODE_ENV === "production") {
+            throw new Error(
+                "GST_PROVIDER=sandbox is not allowed when NODE_ENV=production - confirm the real provider is configured"
+            );
+        }
 
         if (!this.instances[key]) {
             this.instances[key] = this.create(key);

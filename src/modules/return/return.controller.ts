@@ -26,9 +26,10 @@ export const returnController = {
     async approveReturn(req: Request, res: Response) {
         try {
             const { returnId } = req.params;
+            const sellerId = req.seller!.id;
             const actorId = req.user!.id;
             const { note } = req.body;
-            const result = await returnService.approveReturn(returnId as string, actorId, note);
+            const result = await returnService.approveReturn(returnId as string, sellerId, actorId, note);
             return res.json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Approve return failed");
@@ -48,9 +49,10 @@ export const returnController = {
     async rejectReturn(req: Request, res: Response) {
         try {
             const { returnId } = req.params;
+            const sellerId = req.seller!.id;
             const actorId = req.user!.id;
             const { note } = req.body;
-            const result = await returnService.rejectReturn(returnId as string, actorId, note);
+            const result = await returnService.rejectReturn(returnId as string, sellerId, actorId, note);
             return res.json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Reject return failed");
@@ -65,7 +67,8 @@ export const returnController = {
     async getReturnRequest(req: Request, res: Response) {
         try {
             const { returnId } = req.params;
-            const result = await returnService.getReturnRequest(returnId as string);
+            const sellerId = req.seller!.id;
+            const result = await returnService.getReturnRequest(returnId as string, sellerId);
             return res.json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Get return request failed");

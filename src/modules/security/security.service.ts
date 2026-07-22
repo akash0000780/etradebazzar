@@ -2,6 +2,9 @@ import { generateSecret, generateURI, verify } from 'otplib';
 import QRCode from "qrcode";
 import { db } from '../../db';
 import { decrypt, encrypt } from '../../utils/encryption';
+import { redis, RedisKeys } from '../../db/redis';
+
+const ACCESS_TOKEN_TTL_SECS = 15 * 60;
 function isValidResult(result: any): boolean {
     // v13 verify() returns true or an object with a success property
     if (result === true) return true;
@@ -10,7 +13,17 @@ function isValidResult(result: any): boolean {
 }
 
 export const securityService = {
-    async generateTwoFactorSecret(userId: string, email: string) {
+    async generateTwoFactorSecret(userId: string, email: string, currentToken?: string) {
+        const user = await db.user.findUnique({ where: { id: userId } });
+
+        if (user?.twoFactorEnabled) {
+            if (!currentToken) {
+                throw new Error("Current 2FA code required to re-enroll");
+            }
+            const valid = await this.verifyTwoFactorToken(userId, currentToken);
+            if (!valid) throw new Error("Invalid 2FA code");
+        }
+
         const secret = generateSecret();
         const otpUrl = await generateURI({
             strategy: "totp",
@@ -22,7 +35,7 @@ export const securityService = {
 
         await db.user.update({
             where: { id: userId },
-            data: { twoFactorSecret: encrypt(secret) },
+            data: { twoFactorSecret: encrypt(secret, userId) },
         });
         return { qrCodeDataUrl, secret };
     },
@@ -30,7 +43,7 @@ export const securityService = {
         const user = await db.user.findUnique({ where: { id: userId } });
         if (!user?.twoFactorSecret) throw new Error("2FA setup not initiated");
 
-        const secret = decrypt(user.twoFactorSecret);
+        const secret = decrypt(user.twoFactorSecret, userId);
         const result = await verify({ token, secret });
         if (!isValidResult(result)) throw new Error("Invalid 2FA code");
 
@@ -43,7 +56,7 @@ export const securityService = {
         const user = await db.user.findUnique({ where: { id: userId } });
         if (!user?.twoFactorEnabled || !user.twoFactorSecret) return false;
 
-        const secret = decrypt(user.twoFactorSecret);
+        const secret = decrypt(user.twoFactorSecret, userId);
         const result = await verify({ token, secret });
         return isValidResult(result);
     },
@@ -79,13 +92,28 @@ export const securityService = {
         const session = await db.session.findFirst({ where: { id: sessionId, userId } });
         if (!session) throw new Error("Session not found");
 
-        return db.session.update({ where: { id: sessionId }, data: { revoked: true } });
+        const updated = await db.session.update({ where: { id: sessionId }, data: { revoked: true } });
+
+        await redis.setex(RedisKeys.tokenBlacklist(sessionId), ACCESS_TOKEN_TTL_SECS, "1");
+
+        return updated;
     },
     async revokeAllSessions(userId: string, exceptSessionId?: string) {
-        return db.session.updateMany({
+        const sessions = await db.session.findMany({
+            where: { userId, revoked: false, id: exceptSessionId ? { not: exceptSessionId } : undefined },
+            select: { id: true },
+        });
+
+        const result = await db.session.updateMany({
             where: { userId, id: exceptSessionId ? { not: exceptSessionId } : undefined },
             data: { revoked: true },
         });
+
+        await Promise.all(
+            sessions.map((s) => redis.setex(RedisKeys.tokenBlacklist(s.id), ACCESS_TOKEN_TTL_SECS, "1"))
+        );
+
+        return result;
     },
     async getSecuritySummary(userId: string) {
         const user = await db.user.findUnique({

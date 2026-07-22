@@ -2,21 +2,24 @@ import { Request, Response } from "express";
 import { orderService } from "./order.service";
 import { logger } from "../../utils/logger";
 import { toCsv } from "../../utils/csv";
+import { createBulkOrderSchema } from "./order.schema";
 
 export const orderController = {
   async createOrder(req: Request, res: Response) {
     try {
       const customerId = req.user!.id;
-      const result = await orderService.createOrder(customerId, req.body);
+      const { idempotencyKey, ...orderData } = req.body;
+      const result = await orderService.createOrder(customerId, idempotencyKey, orderData);
       return res.status(201).json({ success: true, data: result });
     } catch (error: any) {
       logger.error({ err: error.message }, "Create order failed");
       const clientErrors = [
         "One or more products not found or not approved",
         "Sample orders limited to 2 items",
+        "Duplicate order submission detected, please wait",
       ];
       if (clientErrors.includes(error.message)) {
-        return res.status(400).json({ success: false, error: error.message });
+        return res.status(error.message.includes("Duplicate") ? 409 : 400).json({ success: false, error: error.message });
       }
       return res
         .status(500)
@@ -27,7 +30,6 @@ export const orderController = {
   async createBulkOrder(req: Request, res: Response) {
     try {
       const customerId = req.user!.id;
-      const { sellerId, items } = req.body;
       const file = req.file;
 
       if (!file)
@@ -35,11 +37,21 @@ export const orderController = {
           .status(400)
           .json({ success: false, error: "XLS file required" });
 
-      const parsedItems = typeof items === "string" ? JSON.parse(items) : items;
+      const parsedItems = typeof req.body.items === "string" ? JSON.parse(req.body.items) : req.body.items;
+      const parsed = createBulkOrderSchema.shape.body.safeParse({
+        idempotencyKey: req.body.idempotencyKey,
+        sellerId: req.body.sellerId,
+        items: parsedItems,
+      });
+      if (!parsed.success) {
+        return res.status(400).json({ success: false, error: parsed.error.issues[0]?.message ?? "Invalid request" });
+      }
+
       const result = await orderService.createBulkOrder(
         customerId,
-        sellerId,
-        parsedItems,
+        parsed.data.idempotencyKey,
+        parsed.data.sellerId,
+        parsed.data.items,
         file,
       );
       return res.status(201).json({ success: true, data: result });
@@ -48,12 +60,14 @@ export const orderController = {
       const clientErrors = [
         "XLS file is empty",
         "One or more products invalid",
+        "Duplicate order submission detected, please wait",
       ];
       if (
         clientErrors.includes(error.message) ||
-        error.message.startsWith("Missing columns")
+        error.message.startsWith("Missing columns") ||
+        error.message.startsWith("Bulk upload exceeds")
       ) {
-        return res.status(400).json({ success: false, error: error.message });
+        return res.status(error.message.includes("Duplicate") ? 409 : 400).json({ success: false, error: error.message });
       }
       return res
         .status(500)
@@ -61,28 +75,12 @@ export const orderController = {
     }
   },
 
-  async submitProposal(req: Request, res: Response) {
-    try {
-      const { orderId } = req.params;
-      const actorId = req.user!.id;
-      const actorType = req.seller ? "seller" : "customer";
-      const result = await orderService.submitProposal(
-        orderId as string,
-        actorId,
-        actorType,
-        req.body,
-      );
-      return res.status(201).json({ success: true, data: result });
-    } catch (error: any) {
-      logger.error({ err: error.message }, "Submit proposal failed");
-      const clientErrors = ["Order not found", "Order is not in negotiation"];
-      if (clientErrors.includes(error.message)) {
-        return res.status(400).json({ success: false, error: error.message });
-      }
-      return res
-        .status(500)
-        .json({ success: false, error: "Internal server error" });
-    }
+  async submitProposalAsCustomer(req: Request, res: Response) {
+    return submitProposalImpl(req, res, "customer");
+  },
+
+  async submitProposalAsSeller(req: Request, res: Response) {
+    return submitProposalImpl(req, res, "seller");
   },
 
   async respondToProposal(req: Request, res: Response) {
@@ -95,6 +93,7 @@ export const orderController = {
         negotiationId as string,
         actorId,
         actorType,
+        req.seller?.id,
         req.body,
       );
       return res.json({ success: true, data: result });
@@ -106,7 +105,7 @@ export const orderController = {
         "Order not found",
       ];
       if (clientErrors.includes(error.message)) {
-        return res.status(400).json({ success: false, error: error.message });
+        return res.status(error.message === "Order not found" ? 404 : 400).json({ success: false, error: error.message });
       }
       return res
         .status(500)
@@ -145,6 +144,27 @@ export const orderController = {
     }
   },
 
+  async markPacked(req: Request, res: Response) {
+    try {
+      const sellerId = req.seller!.id;
+      const actorId = req.user!.id;
+      const { orderId } = req.params;
+      const result = await orderService.markPacked(orderId as string, sellerId, actorId);
+      return res.json({ success: true, data: result });
+    } catch (error: any) {
+      logger.error({ err: error.message }, "Mark packed failed");
+      const clientErrors = [
+        "Order not found",
+        "Order has no shop assigned yet",
+        "Order address not found",
+        "Assigned shop does not match the address assignment",
+      ];
+      if (clientErrors.includes(error.message) || error.message.startsWith("Cannot mark packed") || error.message.includes("already packed")) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
+      return res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  },
   async setThreshold(req: Request, res: Response) {
     try {
       const sellerId = req.seller!.id;
@@ -177,7 +197,7 @@ export const orderController = {
   async getOrder(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
-      const result = await orderService.getOrder(orderId as string);
+      const result = await orderService.getOrder(orderId as string, req.user?.id, req.seller?.id);
       return res.json({ success: true, data: result });
     } catch (error: any) {
       logger.error({ err: error.message }, "Get order failed");
@@ -350,3 +370,21 @@ export const orderController = {
     }
   },
 };
+
+async function submitProposalImpl(req: Request, res: Response, actorType: "customer" | "seller") {
+  try {
+    const { orderId } = req.params;
+    const actorId = req.user!.id;
+    const result = await orderService.submitProposal(
+      orderId as string, actorId, actorType, req.seller?.id, req.body,
+    );
+    return res.status(201).json({ success: true, data: result });
+  } catch (error: any) {
+    logger.error({ err: error.message }, "Submit proposal failed");
+    const clientErrors = ["Order not found", "Order is not in negotiation"];
+    if (clientErrors.includes(error.message)) {
+      return res.status(error.message === "Order not found" ? 404 : 400).json({ success: false, error: error.message });
+    }
+    return res.status(500).json({ success: false, error: "Internal server error" });
+  }
+}

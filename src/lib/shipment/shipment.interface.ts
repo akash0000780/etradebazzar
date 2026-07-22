@@ -52,8 +52,8 @@ export interface ShipmentProvider {
         cod: boolean
     ): Promise<ServiceabilityResult>;
     createReversePickup(input: CreateShipmentInput): Promise<ShipmentResult>;
-    verifyWebhook(payload: any, signature: string): boolean;
-    parseWebhookEvent(payload: any): WebhookEvent;
+    verifyWebhook(payload: Buffer | string, signature: string): boolean;
+    parseWebhookEvent(payload: Buffer | string): WebhookEvent;
 }
 
 export interface WebhookEvent {

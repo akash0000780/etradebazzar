@@ -2,7 +2,7 @@ import { db } from "../../db/index";
 import { redis } from "../../db/redis";
 import { randomBytes } from "crypto";
 
-const COUPON_LOCK_TTL = 5;
+const COUPON_LOCK_TTL = 15;
 
 async function acquireCouponLock(couponId: string): Promise<boolean> {
   const result = await redis.set(
@@ -84,6 +84,9 @@ export const couponService = {
   ) {
     if (data.count > 1000)
       throw new Error("Cannot generate more than 1000 codes at once");
+    if (data.type === "PERCENTAGE" && data.value > 100) {
+      throw new Error("Percentage discount cannot exceed 100%");
+    }
 
     const bulkGroupId = randomBytes(8).toString("hex");
     const codes: string[] = [];
@@ -92,7 +95,7 @@ export const couponService = {
       if (!codes.includes(code)) codes.push(code);
     }
 
-    await db.coupon.createMany({
+    const result = await db.coupon.createMany({
       data: codes.map((code) => ({
         code,
         type: data.type,
@@ -122,20 +125,16 @@ export const couponService = {
       },
     });
 
-    return { bulkGroupId, generated: codes.length, prefix: data.prefix };
+    return { bulkGroupId, generated: result.count, prefix: data.prefix };
   },
 
-  async validateCoupon(
-    code: string,
+  async _checkValidity(
+    coupon: NonNullable<Awaited<ReturnType<typeof db.coupon.findUnique>>>,
     userId: string,
     orderAmount: number,
     productIds?: string[],
     categoryIds?: string[],
   ) {
-    const coupon = await db.coupon.findUnique({
-      where: { code: code.toUpperCase() },
-    });
-    if (!coupon) throw new Error("Invalid coupon code");
     if (!coupon.isActive) throw new Error("Coupon is not active");
     if (coupon.expiresAt && coupon.expiresAt < new Date())
       throw new Error("Coupon has expired");
@@ -169,6 +168,21 @@ export const couponService = {
       const valid = categoryIds.some((id) => coupon.scopeIds.includes(id));
       if (!valid) throw new Error("Coupon not applicable for these categories");
     }
+  },
+
+  async validateCoupon(
+    code: string,
+    userId: string,
+    orderAmount: number,
+    productIds?: string[],
+    categoryIds?: string[],
+  ) {
+    const coupon = await db.coupon.findUnique({
+      where: { code: code.toUpperCase() },
+    });
+    if (!coupon) throw new Error("Invalid coupon code");
+
+    await this._checkValidity(coupon, userId, orderAmount, productIds, categoryIds);
 
     const discount =
       coupon.type === "PERCENTAGE"
@@ -187,6 +201,61 @@ export const couponService = {
     };
   },
 
+  /**
+   * @param createOrder Callback that creates the order given the validated
+   * discount amount. Must return the created order (with `.id`).
+   */
+  async checkoutWithCoupon<T extends { id: string }>(
+    code: string,
+    userId: string,
+    orderAmount: number,
+    productIds: string[] | undefined,
+    createOrder: (discount: number, couponCode: string) => Promise<T>,
+  ): Promise<{ order: T; discount: number }> {
+    const coupon = await db.coupon.findUnique({
+      where: { code: code.toUpperCase() },
+    });
+    if (!coupon) throw new Error("Invalid coupon code");
+
+    const locked = await acquireCouponLock(coupon.id);
+    if (!locked) throw new Error("Coupon is being processed  try again in a moment");
+
+    try {
+      await this._checkValidity(coupon, userId, orderAmount, productIds);
+
+      const discount =
+        coupon.type === "PERCENTAGE"
+          ? parseFloat(((orderAmount * Number(coupon.value)) / 100).toFixed(2))
+          : Math.min(Number(coupon.value), orderAmount);
+
+      const order = await createOrder(discount, coupon.code);
+
+      await db.$transaction(async (tx) => {
+        const updateResult = await tx.coupon.updateMany({
+          where: { id: coupon.id, usedCount: coupon.maxUses ? { lt: coupon.maxUses } : undefined },
+          data: { usedCount: { increment: 1 } },
+        });
+        if (coupon.maxUses && updateResult.count === 0) {
+          throw new Error("Coupon usage limit reached");
+        }
+
+        await tx.couponUsage.create({
+          data: { couponId: coupon.id, userId, orderId: order.id, discount },
+        });
+      });
+
+      return { order, discount };
+    } finally {
+      await releaseCouponLock(coupon.id);
+    }
+  },
+
+  /**
+   * @deprecated for the checkout path - use checkoutWithCoupon instead,
+   * which holds the lock across order creation so the discount can never
+   * be priced into an order the coupon claim then fails to honor. Kept for
+   * any other caller that applies a coupon to an ALREADY-committed order
+   */
   async applyCoupon(
     couponId: string,
     userId: string,
@@ -203,6 +272,13 @@ export const couponService = {
         if (!coupon) throw new Error("Coupon not found");
         if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) {
           throw new Error("Coupon usage limit reached");
+        }
+
+        const userUsageCount = await tx.couponUsage.count({
+          where: { couponId, userId },
+        });
+        if (userUsageCount >= coupon.perUserLimit) {
+          throw new Error("You have already used this coupon");
         }
 
         await tx.couponUsage.create({

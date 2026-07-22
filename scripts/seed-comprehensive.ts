@@ -1,15 +1,11 @@
-import { db } from "../db/index";
-import { logger } from "../utils/logger";
+import { db } from "../src/db";
+import { redis, RedisKeys } from "../src/db/redis";
+import { assignDefaultRolePermissions, seedPlatformPermissions } from "../src/lib/permission/permission.service";
+import { generateDisplayId } from "../src/lib/uid/uid.generator";
+import { logger } from "../src/utils/logger";
 import bcrypt from "bcryptjs";
-import { encrypt } from "../utils/encryption";
-import { generateDisplayId } from "../lib/uid/uid.generator";
-import {
-  seedPlatformPermissions,
-  assignDefaultRolePermissions,
-} from "../lib/permission/permission.service";
-import { redis, RedisKeys } from "../db/redis";
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// Helpers
 const randomDate = (start: Date, end: Date) =>
   new Date(start.getTime() + Math.random() * (end.getTime() - start.getTime()));
 const randomInt = (min: number, max: number) =>
@@ -17,7 +13,7 @@ const randomInt = (min: number, max: number) =>
 const randomDecimal = (min: number, max: number) =>
   parseFloat((Math.random() * (max - min) + min).toFixed(2));
 const randomItem = <T>(arr: T[]): T =>
-  arr[Math.floor(Math.random() * arr.length)];
+  arr[Math.floor(Math.random() * arr.length)]!;
 const slugify = (s: string) =>
   s
     .toLowerCase()
@@ -26,7 +22,7 @@ const slugify = (s: string) =>
 let _c = 0;
 const uid = () => `${Date.now()}${++_c}`;
 
-// ── Static data ─────────────────────────────────────────────────────────────
+// Static data
 const firstNames = [
   "Rahul",
   "Priya",
@@ -249,7 +245,7 @@ const productNames: Record<string, string[]> = {
   ],
 };
 
-// ── Fix Permissions ────────────────────────────────────────────────────────
+// Fix Permissions
 async function fixSellerPermissions() {
   logger.info("Fixing seller role permissions...");
 
@@ -290,17 +286,22 @@ async function fixSellerPermissions() {
   logger.info(`Permissions fixed for ${fixed} sellers.`);
 }
 
-// ── Seed ───────────────────────────────────────────────────────────────────
+// Seed
 async function seedComprehensive() {
+  if (process.env.NODE_ENV === "production") {
+    logger.error("Refusing to run seed-comprehensive.ts with NODE_ENV=production");
+    process.exit(1);
+  }
+
   logger.info("Starting comprehensive seed...");
   try {
-    // ── 0. Seed platform permissions ───────────────────────────────────────
+    // 0. Seed platform permissions
     logger.info("Seeding platform permissions...");
     await db.$transaction(async (tx) => {
       await seedPlatformPermissions(tx);
     });
 
-    // ── 1. Platform Roles ──────────────────────────────────────────────────
+    // 1. Platform Roles
     logger.info("Seeding platform roles...");
     const [superAdminRole, onboardingRole, reviewerRole] = await Promise.all([
       db.platformRole.upsert({
@@ -323,7 +324,7 @@ async function seedComprehensive() {
       }),
     ]);
 
-    // ── 2. Admin / Platform Users ──────────────────────────────────────────
+    // 2. Admin / Platform Users
     logger.info("Seeding admin users...");
     const [adminPwd, onboardPwd, reviewPwd] = await Promise.all([
       bcrypt.hash("Admin@123456", 12),
@@ -378,7 +379,7 @@ async function seedComprehensive() {
       }),
     ]);
 
-    // ── 3. Platform Configs ────────────────────────────────────────────────
+    // 3. Platform Configs
     logger.info("Seeding platform configs...");
     await Promise.all(
       [
@@ -397,7 +398,7 @@ async function seedComprehensive() {
       ),
     );
 
-    // ── Idempotency check ─────────────────────────────────────────────────
+    // Idempotency check
     const existingSellers = await db.seller.findFirst();
     if (existingSellers) {
       logger.info(
@@ -408,7 +409,7 @@ async function seedComprehensive() {
       return;
     }
 
-    // ── 4. Sellers ─────────────────────────────────────────────────────────
+    // 4. Sellers
     logger.info("Seeding sellers...");
     const sellerPwd = await bcrypt.hash("Seller@123", 12);
 
@@ -619,7 +620,7 @@ async function seedComprehensive() {
       }
     }
 
-    // ── 5. Seller Invites ──────────────────────────────────────────────────
+    // 5. Seller Invites
     logger.info("Seeding seller invites...");
     for (let i = 0; i < 6; i++) {
       await db.sellerInvite.create({
@@ -640,7 +641,7 @@ async function seedComprehensive() {
       });
     }
 
-    // ── 6. Categories ──────────────────────────────────────────────────────
+    // 6. Categories
     logger.info("Seeding categories...");
     const categoryMap = new Map<string, string>();
     for (const parentCat of categoryTree) {
@@ -669,7 +670,7 @@ async function seedComprehensive() {
       }
     }
 
-    // ── 7. Shops ───────────────────────────────────────────────────────────
+    // 7. Shops
     logger.info("Seeding shops...");
     const shops: any[] = [];
     for (const seller of [seller1, seller2]) {
@@ -720,7 +721,7 @@ async function seedComprehensive() {
       },
     });
 
-    // ── 8. Category-level Commissions ─────────────────────────────────────
+    // 8. Category-level Commissions
     logger.info("Seeding category commissions...");
     for (const cat of categoryTree) {
       await db.productCommission.create({
@@ -732,7 +733,7 @@ async function seedComprehensive() {
       });
     }
 
-    // ── 9. Products ────────────────────────────────────────────────────────
+    // 9. Products
     logger.info("Seeding products...");
     const products: any[] = [];
     let skuCounter = 100000;
@@ -824,7 +825,7 @@ async function seedComprehensive() {
       }
     }
 
-    // ── 10. Order Thresholds ───────────────────────────────────────────────
+    // 10. Order Thresholds
     logger.info("Seeding order thresholds...");
     for (const seller of [seller1, seller2]) {
       for (const cat of categoryTree) {
@@ -845,7 +846,7 @@ async function seedComprehensive() {
       }
     }
 
-    // ── 11. Customers ──────────────────────────────────────────────────────
+    // 11. Customers
     logger.info("Seeding customers...");
     const customers: any[] = [];
     const custPwd = await bcrypt.hash("Customer@123", 12);
@@ -861,7 +862,7 @@ async function seedComprehensive() {
       customers.push(customer);
     }
 
-    // ── 12. Wallets ────────────────────────────────────────────────────────
+    // 12. Wallets
     logger.info("Seeding wallets...");
     const walletMap = new Map<string, string>();
     for (const user of [...allSellerUsers, ...customers]) {
@@ -893,7 +894,7 @@ async function seedComprehensive() {
       }
     }
 
-    // ── 13. Sessions ───────────────────────────────────────────────────────
+    // 13. Sessions
     logger.info("Seeding sessions...");
     for (const user of [...allSellerUsers, ...customers.slice(0, 10)]) {
       await db.session.create({
@@ -909,7 +910,7 @@ async function seedComprehensive() {
       });
     }
 
-    // ── 14. Coupons ────────────────────────────────────────────────────────
+    // 14. Coupons
     logger.info("Seeding coupons...");
     const coupons: any[] = [];
     for (const c of [
@@ -968,7 +969,7 @@ async function seedComprehensive() {
       );
     }
 
-    // ── 15. Orders ─────────────────────────────────────────────────────────
+    // 15. Orders
     logger.info("Seeding orders...");
     const orders: { order: any; address: any }[] = [];
     const usedPayoutOrders = new Set<string>();
@@ -1071,10 +1072,10 @@ async function seedComprehensive() {
               oStatus === "DELIVERED"
                 ? "DELIVERED"
                 : (randomItem([
-                    "BOOKED",
-                    "IN_TRANSIT",
-                    "OUT_FOR_DELIVERY",
-                  ]) as any),
+                  "BOOKED",
+                  "IN_TRANSIT",
+                  "OUT_FOR_DELIVERY",
+                ]) as any),
             estimatedDelivery: randomDate(
               new Date(),
               new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
@@ -1113,7 +1114,7 @@ async function seedComprehensive() {
       orders.push({ order, address });
     }
 
-    // ── 16. Negotiations ───────────────────────────────────────────────────
+    // 16. Negotiations
     logger.info("Seeding negotiations...");
     for (const { order } of orders
       .filter((o) => o.order.status === "NEGOTIATING")
@@ -1148,7 +1149,7 @@ async function seedComprehensive() {
       });
     }
 
-    // ── 17. Coupon Usages ──────────────────────────────────────────────────
+    // 17. Coupon Usages
     logger.info("Seeding coupon usages...");
     for (let i = 0; i < 8; i++) {
       const { order } = orders[i];
@@ -1164,7 +1165,7 @@ async function seedComprehensive() {
       usedCouponOrders.add(order.id);
     }
 
-    // ── 18. Reviews + Helpful Votes ────────────────────────────────────────
+    // 18. Reviews + Helpful Votes
     logger.info("Seeding reviews...");
     const deliveredOrders = orders.filter(
       (o) => o.order.status === "DELIVERED",
@@ -1208,7 +1209,7 @@ async function seedComprehensive() {
       }
     }
 
-    // ── 19. Return Requests + Return Shipments ─────────────────────────────
+    // 19. Return Requests + Return Shipments
     logger.info("Seeding return requests...");
     for (const { order } of deliveredOrders.slice(0, 8)) {
       const returnReq = await db.returnRequest.create({
@@ -1247,7 +1248,7 @@ async function seedComprehensive() {
       }
     }
 
-    // ── 20. Seller Payouts + Payout Orders ────────────────────────────────
+    // 20. Seller Payouts + Payout Orders
     logger.info("Seeding payouts...");
     for (const seller of [seller1, seller2]) {
       const sellerOrders = orders.filter((o) => o.order.sellerId === seller.id);
@@ -1307,7 +1308,7 @@ async function seedComprehensive() {
       }
     }
 
-    // ── 21. Audit Logs ─────────────────────────────────────────────────────
+    // 21. Audit Logs
     logger.info("Seeding audit logs...");
     for (let i = 0; i < 30; i++) {
       const seller = randomItem([seller1, seller2]);
@@ -1326,7 +1327,7 @@ async function seedComprehensive() {
       });
     }
 
-    // ── 22. Notifications ──────────────────────────────────────────────────
+    // 22. Notifications
     logger.info("Seeding notifications...");
     const notifDefs = [
       {
@@ -1385,7 +1386,7 @@ async function seedComprehensive() {
       }
     }
 
-    // ── 23. Fix Permissions ────────────────────────────────────────────────
+    // 23. Fix Permissions
     await fixSellerPermissions();
 
     logger.info("✅ Seed completed!");

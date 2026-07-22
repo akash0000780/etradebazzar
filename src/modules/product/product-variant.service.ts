@@ -1,5 +1,42 @@
 import { db } from "../../db/index";
 
+type CategoryVariantAttribute = {
+  label: string;
+  type: "TEXT" | "NUMBER" | "ENUM" | "BOOLEAN";
+  options: string[];
+};
+
+async function findCategoryVariantAttribute(
+  categoryId: string,
+  optionName: string,
+): Promise<CategoryVariantAttribute | null> {
+  const definitions = await db.categoryAttribute.findMany({
+    where: { categoryId, isVariant: true },
+  });
+  if (!definitions.length) return null;
+
+  const match = definitions.find(
+    (def) => def.label.toLowerCase() === optionName.toLowerCase(),
+  );
+  if (!match) {
+    throw new Error(
+      `Variant attribute "${optionName}" is not defined for this category`,
+    );
+  }
+  return match;
+}
+
+function assertAllowedValues(attribute: CategoryVariantAttribute, values: string[]): void {
+  if (attribute.type !== "ENUM") return;
+  for (const value of values) {
+    if (!attribute.options.includes(value)) {
+      throw new Error(
+        `Invalid variant value "${value}" for attribute "${attribute.label}"`,
+      );
+    }
+  }
+}
+
 export const productVariantService = {
   async createVariant(
     sellerId: string,
@@ -18,6 +55,12 @@ export const productVariantService = {
     });
     if (existing)
       throw new Error(`Variant option "${data.name}" already exists`);
+
+    const categoryAttribute = await findCategoryVariantAttribute(
+      product.categoryId,
+      data.name,
+    );
+    if (categoryAttribute) assertAllowedValues(categoryAttribute, data.values);
 
     return db.variantOption.create({
       data: {
@@ -46,6 +89,12 @@ export const productVariantService = {
       where: { id: optionId, productId },
     });
     if (!option) throw new Error("Variant option not found");
+
+    const categoryAttribute = await findCategoryVariantAttribute(
+      product.categoryId,
+      option.name,
+    );
+    if (categoryAttribute) assertAllowedValues(categoryAttribute, values);
 
     const existing = await db.variantOptionValue.findMany({
       where: { optionId },

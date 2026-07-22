@@ -1,4 +1,5 @@
 import { db } from "../../db/index";
+import { redis } from "../../db/redis";
 import { walletService } from "../../modules/wallet/wallet.service";
 import { logger } from "../../utils/logger";
 
@@ -10,6 +11,8 @@ export const CREDIT_RULES = {
     IMMEDIATE_CANCEL_WINDOW_MINUTES: 60,
 };
 
+const CREDIT_LOCK_TTL = 10;
+
 async function alreadyAwarded(userId: string, reason: string): Promise<boolean> {
     const wallet = await db.wallet.findUnique({ where: { userId } });
     if (!wallet) return false;
@@ -17,11 +20,22 @@ async function alreadyAwarded(userId: string, reason: string): Promise<boolean> 
     return !!existing;
 }
 
+async function awardOnceWithLock(userId: string, reason: string, amount: number, referenceId?: string) {
+    const lockKey = `credit-lock:${reason}:${userId}`;
+    const locked = await redis.set(lockKey, "1", "EX", CREDIT_LOCK_TTL, "NX");
+    if (!locked) return;
+    try {
+        if (await alreadyAwarded(userId, reason)) return;
+        await walletService.credit(userId, amount, reason, referenceId);
+    } finally {
+        await redis.del(lockKey);
+    }
+}
+
 export const creditEngine = {
     async awardOnboardingBonus(userId: string) {
         try {
-            if (await alreadyAwarded(userId, "ONBOARDING_BONUS")) return;
-            await walletService.credit(userId, CREDIT_RULES.ONBOARDING_BONUS, "ONBOARDING_BONUS");
+            await awardOnceWithLock(userId, "ONBOARDING_BONUS", CREDIT_RULES.ONBOARDING_BONUS);
         } catch (err: any) {
             logger.error({ err: err.message, userId }, "Onboarding credit failed");
         }
@@ -29,15 +43,13 @@ export const creditEngine = {
 
     async checkProfileCompletion(userId: string) {
         try {
-            if (await alreadyAwarded(userId, "PROFILE_COMPLETION")) return;
-
             const user = await db.user.findUnique({ where: { id: userId }, select: { name: true } });
             const addressCount = await db.customerAddress.count({ where: { userId } });
 
             const isComplete = !!user?.name && addressCount > 0;
             if (!isComplete) return;
 
-            await walletService.credit(userId, CREDIT_RULES.PROFILE_COMPLETION_BONUS, "PROFILE_COMPLETION");
+            await awardOnceWithLock(userId, "PROFILE_COMPLETION", CREDIT_RULES.PROFILE_COMPLETION_BONUS);
         } catch (err: any) {
             logger.error({ err: err.message, userId }, "Profile completion credit failed");
         }

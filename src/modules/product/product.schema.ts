@@ -16,6 +16,7 @@ export const createProductSchema = z.object({
     width: z.number().positive().optional(),
     height: z.number().positive().optional(),
     isDigital: z.boolean().default(false),
+    attributes: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
   }),
 });
 
@@ -34,6 +35,7 @@ export const updateProductSchema = z.object({
     width: z.number().positive().optional(),
     height: z.number().positive().optional(),
     isDigital: z.boolean().optional(),
+    attributes: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
   }),
 });
 

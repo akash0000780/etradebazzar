@@ -7,10 +7,14 @@ export const securityController = {
         try {
             const userId = req.user!.id;
             const email = req.user!.email;
-            const result = await securityService.generateTwoFactorSecret(userId, email as string);
+            const currentToken = req.body?.currentToken;
+            const result = await securityService.generateTwoFactorSecret(userId, email as string, currentToken);
             return res.json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Setup 2FA failed");
+            if (["Current 2FA code required to re-enroll", "Invalid 2FA code"].includes(error.message)) {
+                return res.status(400).json({ success: false, error: error.message });
+            }
             return res.status(500).json({ success: false, error: "Internal server error" });
         }
     },

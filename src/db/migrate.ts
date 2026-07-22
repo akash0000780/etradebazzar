@@ -37,6 +37,10 @@ async function createAnalyticsViews() {
 }
 
 async function main() {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_PROD_MIGRATE !== "true") {
+    logger.error("Refusing to run migrate.ts against production without ALLOW_PROD_MIGRATE=true");
+    process.exit(1);
+  }
   await runRLSMigration();
   await createAnalyticsViews();
   process.exit(0);

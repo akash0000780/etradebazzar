@@ -24,7 +24,6 @@ export class SandboxGstInstance implements GstProvider {
     const data = (await res.json()) as any;
     return data.data.access_token;
   }
-
   async verifyGst(gstin: string): Promise<GstDetails> {
     const token = await this.getAccessToken();
 
@@ -59,7 +58,6 @@ export class SandboxGstInstance implements GstProvider {
         "GST verification failed  invalid GSTIN or service error",
       );
     }
-
     return {
       gstin: result.gstin,
       legalName: result.lgnm,

@@ -218,16 +218,17 @@ export const notificationService = {
     },
 
     async getNotifications(userId: string, page = 1, limit = 20) {
+        const cappedLimit = Math.min(limit, 100);
         const [notifications, unreadCount] = await Promise.all([
             db.notification.findMany({
                 where: { userId },
                 orderBy: { createdAt: "desc" },
-                skip: (page - 1) * limit,
-                take: limit,
+                skip: (page - 1) * cappedLimit,
+                take: cappedLimit,
             }),
             db.notification.count({ where: { userId, isRead: false } }),
         ]);
-        return { notifications, unreadCount, page, limit };
+        return { notifications, unreadCount, page, limit: cappedLimit };
     },
 
     async markAsRead(userId: string, notificationIds: string[]) {

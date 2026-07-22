@@ -18,24 +18,27 @@ const STATUS_REVERSE_MAP: Record<string, string> = {
 };
 
 export const shipmentService = {
-  async createShipment(
+  async createShipmentForPackedOrder(
     orderId: string,
+    sellerId: string,
     shopId: string,
-    orderAddressId?: string,
+    orderAddressId: string,
   ) {
-    const order = await db.order.findUnique({
-      where: { id: orderId },
+    const order = await db.order.findFirst({
+      where: { id: orderId, sellerId },
       include: { items: { include: { product: true } } },
     });
     if (!order) throw new Error("Order not found");
-    if (order.status !== "CONFIRMED") throw new Error("Order not confirmed");
+    if (order.status !== "PACKED") throw new Error("Order not packed");
 
-    const shop = await db.shop.findUnique({ where: { id: shopId } });
+    if (order.assignedShopId !== shopId) {
+      throw new Error("Shop does not match the order's assigned shop");
+    }
+
+    const shop = await db.shop.findFirst({ where: { id: shopId, sellerId } });
     if (!shop) throw new Error("Shop not found");
 
-    const address = orderAddressId
-      ? await db.orderAddress.findUnique({ where: { id: orderAddressId } })
-      : await db.orderAddress.findFirst({ where: { orderId } });
+    const address = await db.orderAddress.findFirst({ where: { id: orderAddressId, orderId } });
     if (!address) throw new Error("Delivery address not found");
 
     const provider = ShipmentFactory.get();
@@ -96,15 +99,17 @@ export const shipmentService = {
         },
       });
 
-      await tx.order.update({
-        where: { id: orderId },
-        data: { status: "PROCESSING" },
-      });
+      if (trackingId) {
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: "SHIPPED" },
+        });
+      }
 
       if (orderAddressId) {
         await tx.orderAddress.update({
           where: { id: orderAddressId },
-          data: { fulfillmentStatus: "PROCESSING" },
+          data: { fulfillmentStatus: trackingId ? "SHIPPED" : "PROCESSING" },
         });
       }
 
@@ -148,9 +153,9 @@ export const shipmentService = {
     return shipment;
   },
 
-  async trackShipment(shipmentId: string) {
-    const shipment = await db.shipment.findUnique({
-      where: { id: shipmentId },
+  async trackShipment(sellerId: string, shipmentId: string) {
+    const shipment = await db.shipment.findFirst({
+      where: { id: shipmentId, order: { sellerId } },
     });
     if (!shipment) throw new Error("Shipment not found");
     if (!shipment.trackingId) throw new Error("No tracking ID available yet");
@@ -174,6 +179,13 @@ export const shipmentService = {
           where: { id: shipmentId },
           data: { status: mappedStatus as any },
         });
+
+        if (mappedStatus === "OUT_FOR_DELIVERY") {
+          await db.order.update({
+            where: { id: shipment.orderId },
+            data: { status: "OUT_FOR_DELIVERY" },
+          });
+        }
 
         const order = await db.order.findUnique({
           where: { id: shipment.orderId },
@@ -205,33 +217,24 @@ export const shipmentService = {
     }
   },
 
-  async cancelShipment(shipmentId: string, actorId: string) {
-    const shipment = await db.shipment.findUnique({
-      where: { id: shipmentId },
+  async cancelShipment(sellerId: string, shipmentId: string, actorId: string) {
+    const shipment = await db.shipment.findFirst({
+      where: { id: shipmentId, order: { sellerId } },
       include: { order: true },
     });
     if (!shipment) throw new Error("Shipment not found");
     if (shipment.status === "DELIVERED")
       throw new Error("Cannot cancel delivered shipment");
 
-    const provider = ShipmentFactory.get();
-
-    try {
-      if (shipment.trackingId) {
-        await provider.cancelShipment([shipment.trackingId]);
-      }
-    } catch (err: any) {
-      logger.warn(
-        { err: err.message },
-        "Provider cancel failed  updating locally",
-      );
-    }
-
-    return db.$transaction(async (tx) => {
-      const updated = await tx.shipment.update({
-        where: { id: shipmentId },
+    const updated = await db.$transaction(async (tx) => {
+      const updateResult = await tx.shipment.updateMany({
+        where: { id: shipmentId, status: { not: "DELIVERED" } },
         data: { status: "FAILED" },
       });
+
+      if (updateResult.count === 0) {
+        throw new Error("Cannot cancel delivered shipment");
+      }
 
       await tx.auditLog.create({
         data: {
@@ -241,14 +244,40 @@ export const shipmentService = {
           action: "SHIPMENT_CANCELLED",
           entityType: "shipment",
           entityId: shipmentId,
+          metadata: { trackingId: shipment.trackingId },
         },
       });
 
-      return updated;
+      return tx.shipment.findUniqueOrThrow({ where: { id: shipmentId } });
     });
+
+    if (shipment.trackingId) {
+      const provider = ShipmentFactory.get();
+      try {
+        await provider.cancelShipment([shipment.trackingId]);
+      } catch (err: any) {
+        logger.error(
+          { err: err.message, shipmentId, trackingId: shipment.trackingId },
+          "Courier cancel failed after DB already marked shipment cancelled - needs reconciliation",
+        );
+        await db.auditLog.create({
+          data: {
+            sellerId: shipment.order.sellerId,
+            actorId,
+            actorType: "seller",
+            action: "SHIPMENT_CANCEL_PROVIDER_FAILED",
+            entityType: "shipment",
+            entityId: shipmentId,
+            metadata: { trackingId: shipment.trackingId, error: err.message },
+          },
+        });
+      }
+    }
+
+    return updated;
   },
 
-  async handleWebhook(payload: any, signature: string) {
+  async handleWebhook(payload: Buffer | string, signature: string) {
     const provider = ShipmentFactory.get();
 
     if (!provider.verifyWebhook(payload, signature)) {
@@ -283,6 +312,20 @@ export const shipmentService = {
       where: { id: shipment.id },
       data: { status: mappedStatus as any },
     });
+
+    if (mappedStatus === "OUT_FOR_DELIVERY") {
+      await db.order.update({
+        where: { id: shipment.orderId },
+        data: { status: "OUT_FOR_DELIVERY" },
+      });
+    }
+
+    if (mappedStatus === "RETURNED") {
+      await db.order.update({
+        where: { id: shipment.orderId },
+        data: { status: "UNFULFILLABLE" },
+      });
+    }
 
     if (mappedStatus === "DELIVERED") {
       await db.order.update({
@@ -355,7 +398,7 @@ export const shipmentService = {
     }
   ) {
     const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
+    const limit = Math.min(filters.limit ?? 20, 100);
     const allowedSort = ["createdAt", "estimatedDelivery"];
     const sortBy = allowedSort.includes(filters.sortBy ?? "") ? filters.sortBy! : "createdAt";
     const sortOrder = filters.sortOrder === "asc" ? "asc" : "desc";
@@ -403,9 +446,9 @@ export const shipmentService = {
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) || 1 } };
   },
 
-  async getShipment(shipmentId: string) {
-    const shipment = await db.shipment.findUnique({
-      where: { id: shipmentId },
+  async getShipment(sellerId: string, shipmentId: string) {
+    const shipment = await db.shipment.findFirst({
+      where: { id: shipmentId, order: { sellerId } },
       include: {
         order: {
           include: {
@@ -550,6 +593,7 @@ export const shipmentService = {
         },
       },
       orderBy: { createdAt: "desc" },
+      take: 200,
     });
 
     return shipments.map((s) => ({
@@ -567,23 +611,25 @@ export const shipmentService = {
     }));
   },
   async bulkCancel(sellerId: string, actorId: string, shipmentIds: string[]) {
-    let success = 0, failed = 0;
+    const MAX_BULK = 100;
+    if (shipmentIds.length > MAX_BULK) {
+      throw new Error(`Cannot cancel more than ${MAX_BULK} shipments at once`);
+    }
+
+    let success = 0;
+    const failures: { shipmentId: string; error: string }[] = [];
 
     for (const shipmentId of shipmentIds) {
       try {
-        const shipment = await db.shipment.findFirst({
-          where: { id: shipmentId, order: { sellerId } },
-        });
-        if (!shipment) { failed++; continue; }
-
-        await this.cancelShipment(shipmentId, actorId);
+        await this.cancelShipment(sellerId, shipmentId, actorId);
         success++;
-      } catch {
-        failed++;
+      } catch (err: any) {
+        logger.error({ err: err.message, shipmentId }, "Bulk cancel item failed");
+        failures.push({ shipmentId, error: err.message });
       }
     }
 
-    return { success, failed };
+    return { success, failed: failures.length, failures };
   },
   async exportShipmentsCsv(sellerId: string) {
     return db.shipment.findMany({

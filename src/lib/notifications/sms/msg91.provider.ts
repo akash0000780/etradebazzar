@@ -68,10 +68,12 @@ export class Msg91Instance implements SmsProvider {
         const phone = input.to.replace(/^\+/, "");
 
         try {
+            const params = new URLSearchParams({ mobile: phone, otp: input.otp });
             const res = await fetch(
-                `${BASE_URL}/otp/verify?authkey=${this.authKey}&mobile=${phone}&otp=${input.otp}`,
-                { method: "GET" }
-            );
+                `${BASE_URL}/otp/verify?${params}`, {
+                method: "GET",
+                headers: { authkey: this.authKey },
+            });
             const data = await res.json() as any;
             return data.type === "success";
         } catch {

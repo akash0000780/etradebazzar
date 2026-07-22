@@ -1,5 +1,16 @@
 import { db } from "../../db/index";
 import { StorageFactory } from "../../lib/storage/storage.factory";
+const ALLOWED_THUMBNAIL_MIME_TYPES = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+]);
+
+function validateThumbnailFile(file: Express.Multer.File) {
+    if (!ALLOWED_THUMBNAIL_MIME_TYPES.has(file.mimetype)) {
+        throw new Error(`Invalid file type: ${file.mimetype}. Only JPEG, PNG, and WEBP thumbnails are allowed`);
+    }
+}
 
 export const templateService = {
     async createTemplate(
@@ -15,6 +26,7 @@ export const templateService = {
     ) {
         const product = await db.product.findFirst({ where: { id: data.productId, sellerId } });
         if (!product) throw new Error("Product not found");
+        validateThumbnailFile(thumbnailFile);
 
         const storage = StorageFactory.get();
         const upload = await storage.upload({
@@ -75,7 +87,7 @@ export const templateService = {
     },
 
     async getTemplate(templateId: string) {
-        const template = await db.template.findUnique({ where: { id: templateId } });
+        const template = await db.template.findFirst({ where: { id: templateId, isActive: true } });
         if (!template) throw new Error("Template not found");
         return template;
     },

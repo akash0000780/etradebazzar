@@ -40,6 +40,7 @@ export class DigitalOceanSpacesProvider implements StorageProvider {
                 Body: input.buffer,
                 ContentType: input.mimeType,
                 ContentLength: input.size,
+                ContentDisposition: input.contentDisposition,
                 ACL: "public-read",
             })
         );

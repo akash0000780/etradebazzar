@@ -2,8 +2,8 @@ import { z } from "zod";
 
 const addressSchema = z.object({
   street: z.string().min(5),
-  city: z.string().min(2),
-  state: z.string().min(2),
+  city: z.string().min(2).optional(),
+  state: z.string().min(2).optional(),
   pincode: z.string().regex(/^\d{6}$/, "Invalid pincode"),
 });
 
@@ -48,9 +48,30 @@ export const addBankDetailSchema = z.object({
   }),
 });
 
+export const updateBankDetailSchema = z.object({
+  body: z.object({
+    accountHolderName: z.string().min(2).optional(),
+    accountNumber: z.string().regex(/^\d{9,18}$/, "Invalid account number").optional(),
+    ifscCode: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, "Invalid IFSC code").optional(),
+    bankName: z.string().min(2).optional(),
+  }),
+});
+
 export const verifyIfscSchema = z.object({
   body: z.object({
     ifscCode: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, "Invalid IFSC code"),
+  }),
+});
+
+export const bankReverifySchema = z.object({
+  params: z.object({ sellerId: z.string() }),
+});
+
+export const bankOverrideSchema = z.object({
+  params: z.object({ sellerId: z.string() }),
+  body: z.object({
+    verificationStatus: z.enum(["VERIFIED", "NAME_MISMATCH", "FAILED"]),
+    reason: z.string().min(5),
   }),
 });
 

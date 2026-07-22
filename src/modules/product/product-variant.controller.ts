@@ -15,6 +15,8 @@ const clientErrors = [
   "Product has no variant options defined",
   "A SKU with this option combination already exists",
   "All values already exist",
+  "Variant attribute ",
+  "Invalid variant value ",
 ];
 
 function isClientError(message: string): boolean {

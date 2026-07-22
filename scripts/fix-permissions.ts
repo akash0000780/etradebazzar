@@ -1,20 +1,15 @@
-import { db } from "../db/index";
-import { logger } from "../utils/logger";
-import { redis, RedisKeys } from "../db/redis";
-import {
-  seedPlatformPermissions,
-  assignDefaultRolePermissions,
-} from "../lib/permission/permission.service";
+import { db } from "../src/db";
+import { redis, RedisKeys } from "../src/db/redis";
+import { assignDefaultRolePermissions, seedPlatformPermissions } from "../src/lib/permission/permission.service";
+import { logger } from "../src/utils/logger";
 
 async function fixPermissions() {
   logger.info("Fixing seller role permissions...");
 
-  // 1. Ensure all permission keys exist
   await db.$transaction(async (tx) => {
     await seedPlatformPermissions(tx);
   });
 
-  // 2. Find all seller roles grouped by seller
   const sellers = await db.seller.findMany({
     select: {
       id: true,
@@ -30,7 +25,6 @@ async function fixPermissions() {
       continue;
     }
 
-    // Check if any role already has permissions
     const existingPerms = await db.rolePermission.findFirst({
       where: { roleId: { in: roles.map((r) => r.id) } },
     });
@@ -40,12 +34,10 @@ async function fixPermissions() {
       continue;
     }
 
-    // Assign default permissions
     await db.$transaction(async (tx) => {
       await assignDefaultRolePermissions(tx, roles);
     });
 
-    // Invalidate permission cache for all members of this seller
     const members = await db.sellerMember.findMany({
       where: { sellerId: seller.id },
       select: { userId: true },

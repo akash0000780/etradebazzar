@@ -9,24 +9,25 @@ datasource db {
 
 // PLATFORM LEVEL
 model User {
-  id                String            @id @default(cuid())
-  email             String            @unique
-  name              String?
-  password          String
-  isActive          Boolean           @default(true)
-  lastLoginAt       DateTime?
-  createdAt         DateTime          @default(now())
-  twoFactorEnabled  Boolean           @default(false)
-  twoFactorSecret   String?
-  passwordChangedAt DateTime?
-  sessions          Session[]
-  updatedAt         DateTime          @updatedAt
-  orders            Order[]           @relation("CustomerOrders")
-  platformMember    PlatformMember?
-  sellerMemberships SellerMember[]
-  wallet            Wallet[]
-  addresses         CustomerAddress[]
-  cart              Cart?
+  id                   String                @id @default(cuid())
+  email                String                @unique
+  name                 String?
+  password             String
+  isActive             Boolean               @default(true)
+  lastLoginAt          DateTime?
+  createdAt            DateTime              @default(now())
+  twoFactorEnabled     Boolean               @default(false)
+  twoFactorSecret      String?
+  passwordChangedAt    DateTime?
+  sessions             Session[]
+  updatedAt            DateTime              @updatedAt
+  orders               Order[]               @relation("CustomerOrders")
+  platformMember       PlatformMember?
+  sellerMemberships    SellerMember[]
+  wallet               Wallet[]
+  addresses            CustomerAddress[]
+  cart                 Cart?
+  customerUploadAssets CustomerUploadAsset[]
 
   @@index([email])
   @@map("users")
@@ -111,42 +112,53 @@ model Seller {
 }
 
 model SellerBankDetail {
-  id                String   @id @default(cuid())
-  sellerId          String   @unique
-  accountHolderName String
-  accountNumber     String
-  ifscCode          String
-  bankName          String
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  seller            Seller   @relation(fields: [sellerId], references: [id])
+  id                        String                 @id @default(cuid())
+  sellerId                  String                 @unique
+  accountHolderName         String
+  accountNumber             String
+  ifscCode                  String
+  bankName                  String
+  verificationStatus        BankVerificationStatus @default(PENDING)
+  verifiedAccountHolderName String?
+  verifiedAt                DateTime?
+  verificationProvider      String?
+  nameMatchScore            Float?
+  fundAccountId             String?
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
+  seller                    Seller                 @relation(fields: [sellerId], references: [id])
 
   @@map("seller_bank_details")
 }
 
 model SellerKyc {
-  id                    String    @id @default(cuid())
-  sellerId              String    @unique
-  aadharNumber          String
-  panNumber             String
-  gstNumber             String?
-  businessRegNumber     String?
-  documents             String[]
-  status                KycStatus @default(PENDING)
-  rejectedReason        String?
-  verifiedAt            DateTime?
-  verifiedBy            String?
-  aadhaarStatus         KycStatus @default(PENDING)
-  aadhaarRejectedReason String?
-  aadhaarVerifiedAt     DateTime?
-  govtIdType            String?
-  govtIdNumber          String?
-  govtIdStatus          KycStatus @default(PENDING)
-  govtIdRejectedReason  String?
-  govtIdVerifiedAt      DateTime?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
-  seller                Seller    @relation(fields: [sellerId], references: [id])
+  id                      String    @id @default(cuid())
+  sellerId                String    @unique
+  aadharNumber            String
+  panNumber               String
+  gstNumber               String?
+  businessRegNumber       String?
+  documents               String[]
+  status                  KycStatus @default(PENDING)
+  rejectedReason          String?
+  verifiedAt              DateTime?
+  verifiedBy              String?
+  aadhaarStatus           KycStatus @default(PENDING)
+  aadhaarRejectedReason   String?
+  aadhaarVerifiedAt       DateTime?
+  aadhaarOtpClientId      String?
+  aadhaarVerifiedName     String?
+  aadhaarVerificationMeta Json?
+  govtIdType              String?
+  govtIdNumber            String?
+  govtIdStatus            KycStatus @default(PENDING)
+  govtIdRejectedReason    String?
+  govtIdVerifiedAt        DateTime?
+  govtIdVerifiedName      String?
+  govtIdVerificationMeta  Json?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  seller                  Seller    @relation(fields: [sellerId], references: [id])
 
   @@map("seller_kyc")
 }
@@ -223,30 +235,32 @@ model SellerInvite {
 
 // SHOP
 model Shop {
-  id                String         @id @default(cuid())
-  displayId         String?        @unique
-  sellerId          String
-  name              String
-  slug              String         @unique
-  description       String?
-  category          String
-  logo              String?
-  logoKey           String?
-  banner            String?
-  bannerKey         String?
-  contactEmail      String
-  contactPhone      String
-  returnPolicy      String?
-  pickupStreet      String
-  pickupCity        String
-  pickupState       String
-  pickupPincode     String
-  latitude          Decimal?       @db.Decimal(10, 8)
-  longitude         Decimal?       @db.Decimal(11, 8)
-  status            ApprovalStatus @default(PENDING)
-  reviewedBy        String?
-  reviewNote        String?
-  reviewedAt        DateTime?
+  id             String         @id @default(cuid())
+  displayId      String?        @unique
+  sellerId       String
+  name           String
+  slug           String         @unique
+  description    String?
+  category       String
+  logo           String?
+  logoKey        String?
+  banner         String?
+  bannerKey      String?
+  contactEmail   String
+  contactPhone   String
+  returnPolicy   String?
+  pickupStreet   String
+  pickupCity     String
+  pickupState    String
+  pickupPincode  String
+  slaBreachCount Int            @default(0)
+  latitude       Decimal?       @db.Decimal(10, 8)
+  longitude      Decimal?       @db.Decimal(11, 8)
+  status         ApprovalStatus @default(PENDING)
+  reviewedBy     String?
+  reviewNote     String?
+  reviewedAt     DateTime?
+
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   priority          Int            @default(100)
@@ -265,19 +279,40 @@ model Shop {
 
 // CATEGORY
 model Category {
-  id          String     @id @default(cuid())
-  name        String     @unique
-  slug        String     @unique
+  id          String              @id @default(cuid())
+  name        String              @unique
+  slug        String              @unique
   description String?
   parentId    String?
-  parent      Category?  @relation("CategoryTree", fields: [parentId], references: [id])
-  children    Category[] @relation("CategoryTree")
+  parent      Category?           @relation("CategoryTree", fields: [parentId], references: [id])
+  children    Category[]          @relation("CategoryTree")
   products    Product[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  attributes  CategoryAttribute[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
 
   @@index([parentId])
   @@map("categories")
+}
+
+model CategoryAttribute {
+  id         String                @id @default(cuid())
+  categoryId String
+  key        String
+  label      String
+  type       CategoryAttributeType
+  required   Boolean               @default(false)
+  isVariant  Boolean               @default(false)
+  options    String[]              @default([])
+  unit       String?
+  sortOrder  Int                   @default(0)
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+  category   Category              @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([categoryId, key])
+  @@index([categoryId])
+  @@map("category_attributes")
 }
 
 // PRODUCT
@@ -299,13 +334,14 @@ model Product {
   width             Decimal?            @db.Decimal(8, 2)
   height            Decimal?            @db.Decimal(8, 2)
   isDigital         Boolean             @default(false)
+  attributes        Json?
   status            ApprovalStatus      @default(PENDING)
   reviewedBy        String?
   reviewNote        String?
   reviewedAt        DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
-  shop              Shop?                @relation(fields: [shopId], references: [id])
+  shop              Shop?               @relation(fields: [shopId], references: [id])
   category          Category            @relation(fields: [categoryId], references: [id])
   images            ProductImage[]
   variants          VariantOption[]
@@ -317,7 +353,7 @@ model Product {
   cartItems         CartItem[]
 
   @@index([sellerId, status])
-  @@index([shopId])
+  @@index([sellerId])
   @@index([categoryId])
   @@map("products")
 }
@@ -448,6 +484,10 @@ model Order {
   assignedShopId   String?
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
+  packingDeadline  DateTime?
+  packedAt         DateTime?
+  dispatchDeadline DateTime?
+  slaBreachedAt    DateTime?
   seller           Seller             @relation(fields: [sellerId], references: [id])
   assignedShop     Shop?              @relation(fields: [assignedShopId], references: [id])
   customer         User               @relation("CustomerOrders", fields: [customerId], references: [id])
@@ -818,7 +858,7 @@ model WalletTopup {
   walletId     String
   amount       Decimal     @db.Decimal(10, 2)
   method       TopupMethod
-  utrReference String
+  utrReference String      @unique
   createdAt    DateTime    @default(now())
   wallet       Wallet      @relation(fields: [walletId], references: [id])
 
@@ -912,6 +952,19 @@ model CustomerAddress {
   @@map("customer_addresses")
 }
 
+model CustomerUploadAsset {
+  id        String   @id @default(cuid())
+  userId    String
+  url       String
+  key       String
+  fileType  String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("customer_upload_assets")
+}
+
 model Cart {
   id        String     @id @default(cuid())
   userId    String     @unique
@@ -978,6 +1031,13 @@ enum KycStatus {
   REJECTED
 }
 
+enum BankVerificationStatus {
+  PENDING
+  VERIFIED
+  NAME_MISMATCH
+  FAILED
+}
+
 enum ApprovalStatus {
   PENDING
   APPROVED
@@ -1002,11 +1062,15 @@ enum OrderStatus {
   PENDING
   NEGOTIATING
   CONFIRMED
+  PACKED
   PROCESSING
   SHIPPED
+  OUT_FOR_DELIVERY
   DELIVERED
   CANCELLED
   PENDING_ASSIGNMENT
+  UNFULFILLABLE
+  RETURNED
 }
 
 enum PaymentStatus {
@@ -1111,4 +1175,11 @@ enum TopupMethod {
   RTGS
   IMPS
   UPI
+}
+
+enum CategoryAttributeType {
+  TEXT
+  NUMBER
+  ENUM
+  BOOLEAN
 }

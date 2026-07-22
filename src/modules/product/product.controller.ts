@@ -3,6 +3,16 @@ import { productService } from "./product.service";
 import { logger } from "../../utils/logger";
 import { toCsv } from "../../utils/csv";
 
+const ATTRIBUTE_ERROR_PREFIXES = [
+  "Unknown attribute",
+  "Missing required attribute",
+  "Invalid value for attribute",
+];
+
+function isAttributeError(message: string): boolean {
+  return ATTRIBUTE_ERROR_PREFIXES.some((prefix) => message.startsWith(prefix));
+}
+
 export const productController = {
   async createProduct(req: Request, res: Response) {
     try {
@@ -24,7 +34,7 @@ export const productController = {
         "KYC not verified",
         "Category not found",
       ];
-      if (clientErrors.includes(error.message)) {
+      if (clientErrors.includes(error.message) || isAttributeError(error.message)) {
         return res.status(400).json({ success: false, error: error.message });
       }
       return res
@@ -51,8 +61,9 @@ export const productController = {
         "Product not found",
         "Cannot update rejected product",
         "SKU already exists",
+        "Category not found",
       ];
-      if (clientErrors.includes(error.message)) {
+      if (clientErrors.includes(error.message) || isAttributeError(error.message)) {
         return res.status(400).json({ success: false, error: error.message });
       }
       return res

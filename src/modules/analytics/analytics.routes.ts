@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { analyticsController } from "./analytics.controller";
 import { protect } from "../../middleware/auth";
-import { resolveTenant, setPlatformAdmin } from "../../middleware/tenant";
-import { requirePlatformRole, requireSellerRole } from "../../middleware/rbac";
+import { resolveTenant, requirePlatformAdmin } from "../../middleware/tenant";
+import { requireSellerRole } from "../../middleware/rbac";
 import { validate } from "../../utils/validate";
 import { sellerLimiter } from "../../middleware/rate-limit";
 import {
@@ -57,8 +57,7 @@ router.get(
     "/platform",
     protect,
     sellerLimiter,
-    setPlatformAdmin,
-    requirePlatformRole("super_admin", "onboarding_manager"),
+    requirePlatformAdmin("super_admin", "onboarding_manager"),
     validate(platformAnalyticsSchema),
     analyticsController.getPlatformAnalytics
 );
@@ -67,8 +66,7 @@ router.get(
     "/platform/sellers",
     protect,
     sellerLimiter,
-    setPlatformAdmin,
-    requirePlatformRole("super_admin", "onboarding_manager"),
+    requirePlatformAdmin("super_admin", "onboarding_manager"),
     analyticsController.getTopSellers
 );
 
@@ -77,8 +75,7 @@ router.post(
     "/refresh",
     protect,
     sellerLimiter,
-    setPlatformAdmin,
-    requirePlatformRole("super_admin"),
+    requirePlatformAdmin("super_admin"),
     analyticsController.refreshAllViews
 );
 
@@ -86,8 +83,7 @@ router.post(
     "/refresh/:viewName",
     protect,
     sellerLimiter,
-    setPlatformAdmin,
-    requirePlatformRole("super_admin"),
+    requirePlatformAdmin("super_admin"),
     validate(refreshViewSchema),
     analyticsController.refreshView
 );

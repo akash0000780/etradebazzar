@@ -5,6 +5,13 @@ import { config } from "../../../config/config";
 
 import { CreateOrderInput, GatewayOrder, GatewayRefund, PaymentGateway, RefundInput, VerifyInput, WebhookResult } from "./gateway.interface";
 
+function timingSafeEqualStr(a: string, b: string): boolean {
+    const bufA = Buffer.from(a, "utf8");
+    const bufB = Buffer.from(b, "utf8");
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export class RazorpayInstance implements PaymentGateway {
     private client: Razorpay;
 
@@ -37,7 +44,7 @@ export class RazorpayInstance implements PaymentGateway {
             .createHmac("sha256", config.razorpayKeySecret)
             .update(body)
             .digest("hex");
-        return expected === data.signature;
+        return timingSafeEqualStr(expected, data.signature);
     }
 
     async initiateRefund(data: RefundInput): Promise<GatewayRefund> {
@@ -52,19 +59,23 @@ export class RazorpayInstance implements PaymentGateway {
             raw: refund,
         };
     }
-    async handleWebhook(payload: any, signature: string): Promise<WebhookResult> {
+    async handleWebhook(payload: Buffer | string, signature: string): Promise<WebhookResult> {
+        const rawBody = Buffer.isBuffer(payload) ? payload.toString("utf8") : payload;
+
         const expected = crypto
             .createHmac("sha256", config.razorpayWebhookSecret)
-            .update(JSON.stringify(payload))
+            .update(rawBody)
             .digest("hex");
 
-        if (expected !== signature) {
+        if (!timingSafeEqualStr(expected, signature)) {
             throw new Error("Invalid webhook signature");
         }
 
-        const event = payload.event as string;
-        const paymentEntity = payload.payload?.payment?.entity;
-        const refundEntity = payload.payload?.refund?.entity;
+        const parsed = JSON.parse(rawBody);
+
+        const event = parsed.event as string;
+        const paymentEntity = parsed.payload?.payment?.entity;
+        const refundEntity = parsed.payload?.refund?.entity;
 
         switch (event) {
             case "payment.captured":

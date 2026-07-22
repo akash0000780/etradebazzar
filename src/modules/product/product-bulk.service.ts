@@ -26,6 +26,7 @@ interface RowResult {
 }
 
 const REQUIRED_COLS = ["name", "categorySlug", "shopId"];
+const MAX_ROWS = 500;
 
 export const productBulkService = {
     async uploadProducts(
@@ -42,6 +43,9 @@ export const productBulkService = {
 
         const rows = XLSX.utils.sheet_to_json<any>(sheet);
         if (!rows.length) throw new Error("XLS file is empty");
+        if (rows.length > MAX_ROWS) {
+            throw new Error(`Bulk upload exceeds maximum of ${MAX_ROWS} products`);
+        }
 
         const firstRow = rows[0];
         const missing = REQUIRED_COLS.filter((col) => !(col in firstRow));

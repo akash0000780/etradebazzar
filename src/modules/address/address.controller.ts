@@ -10,6 +10,9 @@ export const addressController = {
             return res.status(201).json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Create address failed");
+            if (error.message.includes("could not be determined from the provided pincode")) {
+                return res.status(400).json({ success: false, error: error.message });
+            }
             return res.status(500).json({ success: false, error: "Internal server error" });
         }
     },

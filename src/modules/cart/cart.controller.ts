@@ -71,10 +71,14 @@ export const cartController = {
     async checkout(req: Request, res: Response) {
         try {
             const userId = req.user!.id;
-            const result = await cartService.checkout(userId, req.body);
+            const { idempotencyKey, ...checkoutData } = req.body;
+            const result = await cartService.checkout(userId, idempotencyKey, checkoutData);
             return res.status(201).json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Checkout failed");
+            if (error.message === "Duplicate order submission detected, please wait") {
+                return res.status(409).json({ success: false, error: error.message });
+            }
             if (clientErrors.includes(error.message)) return res.status(400).json({ success: false, error: error.message });
             return res.status(400).json({ success: false, error: error.message });
         }

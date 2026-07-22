@@ -108,7 +108,7 @@ export const platformController = {
         { err: error.message },
         "Update platform member role failed",
       );
-      const clientErrors = ["Member not found", "Role not found"];
+      const clientErrors = ["Member not found", "Role not found", "Cannot remove last super_admin"];
       if (clientErrors.includes(error.message)) {
         return res.status(400).json({ success: false, error: error.message });
       }
@@ -153,13 +153,15 @@ export const platformController = {
 
   async getAuditLogs(req: Request, res: Response) {
     try {
-      const { sellerId, actorId, action } = req.query as Record<string, string>;
+      const { sellerId, actorId, action, page, limit } = req.query as Record<string, string>;
       const result = await platformService.getAuditLogs({
         sellerId,
         actorId,
         action,
+        page: page ? Number(page) : undefined,
+        limit: limit ? Number(limit) : undefined,
       });
-      return res.json({ success: true, data: result });
+      return res.json({ success: true, data: result.data, meta: result.meta });
     } catch (error: any) {
       logger.error({ err: error.message }, "Get audit logs failed");
       return res

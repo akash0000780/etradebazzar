@@ -31,6 +31,7 @@ export const productBulkController = {
                 "KYC not submitted",
                 "KYC not verified",
                 "Missing columns",
+                "Bulk upload exceeds",
             ];
             if (clientErrors.some((e) => error.message.startsWith(e))) {
                 return res.status(400).json({ success: false, error: error.message });

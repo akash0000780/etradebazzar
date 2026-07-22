@@ -55,8 +55,9 @@ export const sellerProfileController = {
 
     async getShopStats(req: Request, res: Response) {
         try {
+            const sellerId = req.seller!.id;
             const { shopId } = req.params;
-            const result = await sellerProfileService.getShopStats(shopId as string);
+            const result = await sellerProfileService.getShopStats(sellerId, shopId as string);
             return res.json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Get shop stats failed");

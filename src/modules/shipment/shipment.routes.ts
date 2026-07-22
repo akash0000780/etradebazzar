@@ -6,7 +6,11 @@ import { requireSellerRole } from "../../middleware/rbac";
 import { sellerLimiter, } from "../../middleware/rate-limit";
 import express from "express";
 import { validate } from "../../utils/validate";
-import { bulkCancelShipmentsSchema } from "./shipment.schema";
+import {
+    bulkCancelShipmentsSchema,
+    shipmentParamSchema,
+    serviceabilitySchema,
+} from "./shipment.schema";
 const router = Router();
 
 //Seller
@@ -28,21 +32,13 @@ router.get(
     shipmentController.listShipments
 );
 
-router.post(
-    "/",
-    protect,
-    sellerLimiter,
-    resolveTenant,
-    requireSellerRole("owner", "manager"),
-    shipmentController.createShipment
-);
-
 router.get(
     "/serviceability",
     protect,
     sellerLimiter,
     resolveTenant,
     requireSellerRole("owner", "manager", "staff"),
+    validate(serviceabilitySchema),
     shipmentController.checkServiceability
 );
 
@@ -52,6 +48,7 @@ router.get(
     sellerLimiter,
     resolveTenant,
     requireSellerRole("owner", "manager", "staff"),
+    validate(shipmentParamSchema),
     shipmentController.getShipmentWithOrder
 );
 
@@ -61,6 +58,7 @@ router.get(
     sellerLimiter,
     resolveTenant,
     requireSellerRole("owner", "manager", "staff"),
+    validate(shipmentParamSchema),
     shipmentController.getShipment
 );
 
@@ -70,6 +68,7 @@ router.get(
     sellerLimiter,
     resolveTenant,
     requireSellerRole("owner", "manager", "staff"),
+    validate(shipmentParamSchema),
     shipmentController.trackShipment
 );
 
@@ -79,6 +78,7 @@ router.patch(
     sellerLimiter,
     resolveTenant,
     requireSellerRole("owner", "manager"),
+    validate(shipmentParamSchema),
     shipmentController.cancelShipment
 );
 

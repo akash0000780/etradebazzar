@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const verifyPaymentSchema = z.object({
     body: z.object({
+        orderId: z.string(),
         razorpayOrderId: z.string(),
         razorpayPaymentId: z.string(),
         razorpaySignature: z.string(),

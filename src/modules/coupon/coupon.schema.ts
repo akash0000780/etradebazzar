@@ -18,7 +18,10 @@ export const createCouponSchema = z.object({
         scopeIds: z.array(z.string()).optional(),
         firstTimeOnly: z.boolean().optional(),
         userSegment: z.string().optional(),
-    }),
+    }).refine(
+        (data) => !(data.type === "PERCENTAGE" && data.value > 100),
+        { message: "Percentage discount cannot exceed 100%", path: ["value"] }
+    ),
 });
 
 export const bulkGenerateCouponSchema = z.object({
@@ -32,7 +35,10 @@ export const bulkGenerateCouponSchema = z.object({
         expiresAt: z.string().datetime().optional(),
         scopeType: scopeTypeEnum.optional(),
         scopeIds: z.array(z.string()).optional(),
-    }),
+    }).refine(
+        (data) => !(data.type === "PERCENTAGE" && data.value > 100),
+        { message: "Percentage discount cannot exceed 100%", path: ["value"] }
+    ),
 });
 
 export const validateCouponSchema = z.object({

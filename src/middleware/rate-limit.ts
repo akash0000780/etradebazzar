@@ -1,9 +1,8 @@
 import { Request, Response, NextFunction } from "express";
-import { redis } from "../db/redis";
+import { redis, RedisKeys } from "../db/redis";
 import { logger } from "../utils/logger";
 
-// KEYS[1] = key, ARGV[1] = window secs, ARGV[2] = max
-const SLIDING_WINDOW_SCRIPT = `
+const FIXED_WINDOW_SCRIPT = `
 local key = KEYS[1]
 local window = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
@@ -22,6 +21,7 @@ interface RateLimitOptions {
     max: number;
     keyPrefix: string;
     keyExtractor?: (req: Request) => string | null;
+    failClosed?: boolean;
 }
 
 interface RateLimitConfig {
@@ -30,20 +30,44 @@ interface RateLimitConfig {
 }
 
 function getConfig(key: string, defaults: RateLimitConfig): RateLimitConfig {
-    return {
-        windowSecs: Number(process.env[`RATE_LIMIT_${key}_WINDOW`] ?? defaults.windowSecs),
-        max: Number(process.env[`RATE_LIMIT_${key}_MAX`] ?? defaults.max),
-    };
+    const windowSecs = Number(process.env[`RATE_LIMIT_${key}_WINDOW`] ?? defaults.windowSecs);
+    const max = Number(process.env[`RATE_LIMIT_${key}_MAX`] ?? defaults.max);
+
+    if (!Number.isFinite(windowSecs) || windowSecs <= 0) {
+        throw new Error(`Invalid RATE_LIMIT_${key}_WINDOW - refusing to boot with disabled rate limiting`);
+    }
+    if (!Number.isFinite(max) || max <= 0) {
+        throw new Error(`Invalid RATE_LIMIT_${key}_MAX - refusing to boot with disabled rate limiting`);
+    }
+
+    return { windowSecs, max };
+}
+
+const TRUST_PROXY = process.env.TRUST_PROXY === "true";
+
+function getIp(req: Request): string {
+    if (TRUST_PROXY) {
+        const forwarded = req.headers["x-forwarded-for"];
+        if (forwarded) {
+            const first = Array.isArray(forwarded) ? forwarded[0] : forwarded.split(",")[0];
+            if (first?.trim()) return first.trim();
+        }
+    }
+    return req.ip ?? "unknown";
+}
+
+function getSellerOrIp(req: Request): string {
+    return req.seller?.id ?? req.user?.id ?? getIp(req);
 }
 
 function createRateLimiter(opts: RateLimitOptions) {
     return async (req: Request, res: Response, next: NextFunction) => {
         try {
             const identifier = opts.keyExtractor?.(req) ?? getIp(req);
-            const key = `rl:${opts.keyPrefix}:${identifier}`;
+            const key = RedisKeys.rateLimit(opts.keyPrefix, identifier);
 
             const result = await redis.eval(
-                SLIDING_WINDOW_SCRIPT,
+                FIXED_WINDOW_SCRIPT,
                 1,
                 key,
                 String(opts.windowSecs),
@@ -70,57 +94,71 @@ function createRateLimiter(opts: RateLimitOptions) {
             next();
         } catch (err: any) {
             // Redis down - fail open, never block legitimate traffic
-            logger.error({ err: err.message }, "Rate limiter Redis error - failing open");
+            logger.error(
+                { err: err.message, keyPrefix: opts.keyPrefix },
+                `Rate limiter Redis error - failing ${opts.failClosed ? "closed" : "open"}`
+            );
+            if (opts.failClosed) {
+                return res.status(503).json({
+                    success: false,
+                    error: "Service temporarily unavailable, please try again shortly",
+                });
+            }
             next();
         }
     };
 }
 
-function getIp(req: Request): string {
-    const forwarded = req.headers["x-forwarded-for"];
-    if (forwarded) {
-        const first = Array.isArray(forwarded) ? forwarded[0] : forwarded.split(",")[0];
-        return first?.trim() ?? req.ip ?? "unknown";
-    }
-    return req.ip ?? "unknown";
-}
-
-function getSellerOrIp(req: Request): string {
-    return req.seller?.id ?? req.user?.id ?? getIp(req);
+function getAuthIdentifier(req: Request): string {
+    const rawAccountId = req.body?.email || req.body?.phone;
+    const ip = getIp(req);
+    if (!rawAccountId) return ip;
+    const normalized = String(rawAccountId).trim().toLowerCase().slice(0, 320);
+    return `${ip}:${normalized}`;
 }
 
 export const authLimiter = createRateLimiter({
     ...getConfig("AUTH", { windowSecs: 60, max: 10 }),
     keyPrefix: "auth",
-    keyExtractor: (req) => getIp(req),
+    keyExtractor: getAuthIdentifier,
+    failClosed: true,
 });
 
 export const sellerLimiter = createRateLimiter({
     ...getConfig("SELLER", { windowSecs: 60, max: 300 }),
     keyPrefix: "seller",
-    keyExtractor: (req) => getSellerOrIp(req),
+    keyExtractor: getSellerOrIp,
 });
 
 export const uploadLimiter = createRateLimiter({
     ...getConfig("UPLOAD", { windowSecs: 60, max: 20 }),
     keyPrefix: "upload",
-    keyExtractor: (req) => getSellerOrIp(req),
+    keyExtractor: getSellerOrIp,
 });
 
 export const publicLimiter = createRateLimiter({
     ...getConfig("PUBLIC", { windowSecs: 60, max: 100 }),
     keyPrefix: "public",
-    keyExtractor: (req) => getIp(req),
+    keyExtractor: getIp,
 });
 
 export const paymentLimiter = createRateLimiter({
     ...getConfig("PAYMENT", { windowSecs: 60, max: 30 }),
     keyPrefix: "payment",
-    keyExtractor: (req) => getIp(req),
+    keyExtractor: getIp,
+    failClosed: true,
 });
 
 export const otpLimiter = createRateLimiter({
     ...getConfig("OTP", { windowSecs: 300, max: 5 }),
     keyPrefix: "otp",
-    keyExtractor: (req) => getIp(req),
+    keyExtractor: getAuthIdentifier,
+    failClosed: true,
+});
+
+export const twoFactorLimiter = createRateLimiter({
+    ...getConfig("2FA", { windowSecs: 60, max: 5 }),
+    keyPrefix: "2fa",
+    keyExtractor: (req) => req.user?.id ?? getIp(req),
+    failClosed: true,
 });

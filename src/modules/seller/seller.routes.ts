@@ -1,8 +1,7 @@
 import { Router } from "express";
 import { sellerController } from "./seller.controller";
 import { protect } from "../../middleware/auth";
-import { resolveTenant, setPlatformAdmin } from "../../middleware/tenant";
-import { requirePlatformRole } from "../../middleware/rbac";
+import { resolveTenant, requirePlatformAdmin } from "../../middleware/tenant";
 import { requirePermission } from "../../middleware/permission";
 import { PERMISSIONS } from "../../lib/permission/permission.constants";
 import { validate } from "../../utils/validate";
@@ -11,6 +10,9 @@ import {
   registerSellerSchema,
   completeSellerKycSchema,
   addBankDetailSchema,
+  updateBankDetailSchema,
+  bankReverifySchema,
+  bankOverrideSchema,
   inviteSellerSchema,
   acceptInviteSchema,
   approveSellerSchema,
@@ -52,8 +54,7 @@ router.post(
   "/invite",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "onboarding_manager"),
+  requirePlatformAdmin("super_admin", "onboarding_manager"),
   validate(inviteSellerSchema),
   sellerController.inviteSeller,
 );
@@ -62,8 +63,7 @@ router.get(
   "/pending",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "onboarding_manager"),
+  requirePlatformAdmin("super_admin", "onboarding_manager"),
   sellerController.listPendingSellers,
 );
 
@@ -71,8 +71,7 @@ router.get(
   "/all",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "onboarding_manager"),
+  requirePlatformAdmin("super_admin", "onboarding_manager"),
   sellerController.listAllSellers,
 );
 
@@ -80,8 +79,7 @@ router.get(
   "/kyc/pending",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "onboarding_manager"),
+  requirePlatformAdmin("super_admin", "onboarding_manager"),
   sellerController.listPendingKyc,
 );
 
@@ -104,6 +102,16 @@ router.post(
   requirePermission(PERMISSIONS.SELLER_BANK),
   validate(addBankDetailSchema),
   sellerController.addBankDetail,
+);
+
+router.patch(
+  "/bank",
+  protect,
+  sellerLimiter,
+  resolveTenant,
+  requirePermission(PERMISSIONS.SELLER_BANK),
+  validate(updateBankDetailSchema),
+  sellerController.updateBankDetail,
 );
 
 router.get(
@@ -277,8 +285,7 @@ router.get(
   "/:sellerId",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "onboarding_manager", "product_reviewer"),
+  requirePlatformAdmin("super_admin", "onboarding_manager", "product_reviewer"),
   validate(approveSellerSchema),
   sellerController.getSellerById,
 );
@@ -287,8 +294,7 @@ router.patch(
   "/:sellerId/approve",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "onboarding_manager"),
+  requirePlatformAdmin("super_admin", "onboarding_manager"),
   validate(approveSellerSchema),
   sellerController.approveSeller,
 );
@@ -297,8 +303,7 @@ router.patch(
   "/:sellerId/reject",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "onboarding_manager"),
+  requirePlatformAdmin("super_admin", "onboarding_manager"),
   validate(rejectSellerSchema),
   sellerController.rejectSeller,
 );
@@ -307,8 +312,7 @@ router.patch(
   "/:sellerId/suspend",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin"),
+  requirePlatformAdmin("super_admin"),
   validate(suspendSellerSchema),
   sellerController.suspendSeller,
 );
@@ -317,8 +321,7 @@ router.patch(
   "/:sellerId/reactivate",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin"),
+  requirePlatformAdmin("super_admin"),
   sellerController.reactivateSeller,
 );
 
@@ -326,8 +329,7 @@ router.patch(
   "/:sellerId/kyc/verify",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "onboarding_manager"),
+  requirePlatformAdmin("super_admin", "onboarding_manager"),
   validate(kycActionSchema),
   sellerController.verifyKyc,
 );
@@ -336,10 +338,27 @@ router.patch(
   "/:sellerId/kyc/reject",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin", "onboarding_manager"),
+  requirePlatformAdmin("super_admin", "onboarding_manager"),
   validate(rejectKycSchema),
   sellerController.rejectKyc,
+);
+
+router.patch(
+  "/:sellerId/bank/reverify",
+  protect,
+  sellerLimiter,
+  requirePlatformAdmin("super_admin", "onboarding_manager"),
+  validate(bankReverifySchema),
+  sellerController.reverifyBankDetail,
+);
+
+router.patch(
+  "/:sellerId/bank/override",
+  protect,
+  sellerLimiter,
+  requirePlatformAdmin("super_admin", "onboarding_manager"),
+  validate(bankOverrideSchema),
+  sellerController.overrideBankVerification,
 );
 
 // Public — no auth (invitee doesn't have account yet)

@@ -22,7 +22,7 @@ export const storefrontService = {
         if (!shop || shop.status !== "APPROVED") throw new Error("Shop not found");
 
         const page = filters.page ?? 1;
-        const limit = filters.limit ?? 20;
+        const limit = Math.min(filters.limit ?? 20, 100);
 
         const where: any = { shopId: shop.id, status: "APPROVED" };
         if (filters.categoryId) where.categoryId = filters.categoryId;

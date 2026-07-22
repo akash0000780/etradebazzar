@@ -8,7 +8,7 @@ export const userService = {
     limit?: number;
   }) {
     const page = filters.page || 1;
-    const limit = filters.limit || 20;
+    const limit = Math.min(filters.limit || 20, 100);
     const skip = (page - 1) * limit;
 
     const where: any = {};

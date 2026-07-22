@@ -1,6 +1,22 @@
 import { db } from "../../db/index";
 import { StorageFactory } from "../../lib/storage/storage.factory";
 import { notificationService } from "../notification/notification.service";
+const ALLOWED_MEDIA_MIME_TYPES = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+]);
+const MAX_MEDIA_SIZE_BYTES = 5 * 1024 * 1024;
+
+function validateReviewMediaFile(file: Express.Multer.File) {
+    if (!ALLOWED_MEDIA_MIME_TYPES.has(file.mimetype)) {
+        throw new Error(`Invalid file type: ${file.mimetype}. Only JPEG, PNG, WEBP, and GIF images are allowed`);
+    }
+    if (file.size > MAX_MEDIA_SIZE_BYTES) {
+        throw new Error("File too large - maximum 5MB per file");
+    }
+}
 
 export const reviewService = {
     async createReview(
@@ -39,6 +55,9 @@ export const reviewService = {
 
         let mediaUrls: string[] = [];
         if (data.mediaFiles?.length) {
+            for (const file of data.mediaFiles) {
+                validateReviewMediaFile(file);
+            }
             const storage = StorageFactory.get();
             const uploads = await Promise.all(
                 data.mediaFiles.map((file, i) =>
@@ -150,7 +169,14 @@ export const reviewService = {
             });
         }
 
-        await db.reviewHelpful.create({ data: { reviewId, userId } });
+        try {
+            await db.reviewHelpful.create({ data: { reviewId, userId } });
+        } catch (err: any) {
+            if (err.code === "P2002") {
+                return db.review.findUniqueOrThrow({ where: { id: reviewId } });
+            }
+            throw err;
+        }
         return db.review.update({
             where: { id: reviewId },
             data: { helpfulCount: { increment: 1 } },
@@ -209,30 +235,45 @@ export const reviewService = {
         };
     },
 
-    async listPendingReviews() {
-        return db.review.findMany({
-            where: { status: "PENDING" },
-            select: {
-                id: true, rating: true, comment: true, mediaUrls: true,
-                isVerifiedPurchase: true, createdAt: true,
-                product: { select: { id: true, name: true } },
-            },
-            orderBy: { createdAt: "asc" },
-        });
+    async listPendingReviews(page = 1, limit = 20) {
+        const cappedLimit = Math.min(limit, 100);
+        const [data, total] = await Promise.all([
+            db.review.findMany({
+                where: { status: "PENDING" },
+                select: {
+                    id: true, rating: true, comment: true, mediaUrls: true,
+                    isVerifiedPurchase: true, createdAt: true,
+                    product: { select: { id: true, name: true } },
+                },
+                orderBy: { createdAt: "asc" },
+                skip: (page - 1) * cappedLimit,
+                take: cappedLimit,
+            }),
+            db.review.count({ where: { status: "PENDING" } }),
+        ]);
+        return { data, meta: { total, page, limit: cappedLimit, totalPages: Math.ceil(total / cappedLimit) || 1 } };
     },
 
-    async getSellerReviews(sellerId: string, status?: string) {
-        return db.review.findMany({
-            where: {
-                sellerId,
-                ...(status && { status: status as any }),
-            },
-            select: {
-                id: true, rating: true, comment: true, reply: true,
-                repliedAt: true, helpfulCount: true, status: true, createdAt: true,
-                product: { select: { id: true, name: true } },
-            },
-            orderBy: { createdAt: "desc" },
-        });
+    async getSellerReviews(sellerId: string, status?: string, page = 1, limit = 20) {
+        const cappedLimit = Math.min(limit, 100);
+        const where = {
+            sellerId,
+            ...(status && { status: status as any })
+        };
+        const [data, total] = await Promise.all([
+            db.review.findMany({
+                where,
+                select: {
+                    id: true, rating: true, comment: true, reply: true,
+                    repliedAt: true, helpfulCount: true, status: true, createdAt: true,
+                    product: { select: { id: true, name: true } },
+                },
+                orderBy: { createdAt: "desc" },
+                skip: (page - 1) * cappedLimit,
+                take: cappedLimit,
+            }),
+            db.review.count({ where }),
+        ]);
+        return { data, meta: { total, page, limit: cappedLimit, totalPages: Math.ceil(total / cappedLimit) || 1 } };
     },
 };

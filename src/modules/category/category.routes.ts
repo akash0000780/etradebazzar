@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { categoryController } from "./category.controller";
+import { categoryAttributeController } from "./category-attribute.controller";
 import { protect } from "../../middleware/auth";
-import { setPlatformAdmin } from "../../middleware/tenant";
-import { requirePlatformRole } from "../../middleware/rbac";
+import { requirePlatformAdmin } from "../../middleware/tenant";
 import { validate } from "../../utils/validate";
 import { sellerLimiter, publicLimiter } from "../../middleware/rate-limit";
 import {
@@ -11,6 +11,12 @@ import {
   categoryParamSchema,
   listCategoriesSchema,
 } from "./category.schema";
+import {
+  createCategoryAttributeSchema,
+  updateCategoryAttributeSchema,
+  categoryAttributeParamSchema,
+  listCategoryAttributesSchema,
+} from "./category-attribute.schema";
 
 const router = Router();
 
@@ -22,7 +28,7 @@ router.get(
   categoryController.listCategories,
 );
 
-router.get("/tree", categoryController.getCategoryTree);
+router.get("/tree", publicLimiter, categoryController.getCategoryTree);
 
 router.get(
   "/:categoryId",
@@ -35,9 +41,8 @@ router.get(
 router.post(
   "/",
   protect,
-  setPlatformAdmin,
   sellerLimiter,
-  requirePlatformRole("super_admin"),
+  requirePlatformAdmin("super_admin"),
   validate(createCategorySchema),
   categoryController.createCategory,
 );
@@ -45,9 +50,8 @@ router.post(
 router.patch(
   "/:categoryId",
   protect,
-  setPlatformAdmin,
   sellerLimiter,
-  requirePlatformRole("super_admin"),
+  requirePlatformAdmin("super_admin"),
   validate(updateCategorySchema),
   categoryController.updateCategory,
 );
@@ -55,11 +59,44 @@ router.patch(
 router.delete(
   "/:categoryId",
   protect,
-  setPlatformAdmin,
   sellerLimiter,
-  requirePlatformRole("super_admin"),
+  requirePlatformAdmin("super_admin"),
   validate(categoryParamSchema),
   categoryController.deleteCategory,
+);
+
+router.get(
+  "/:categoryId/attributes",
+  publicLimiter,
+  validate(listCategoryAttributesSchema),
+  categoryAttributeController.listAttributes,
+);
+
+router.post(
+  "/:categoryId/attributes",
+  protect,
+  sellerLimiter,
+  requirePlatformAdmin("super_admin"),
+  validate(createCategoryAttributeSchema),
+  categoryAttributeController.createAttribute,
+);
+
+router.patch(
+  "/:categoryId/attributes/:attributeId",
+  protect,
+  sellerLimiter,
+  requirePlatformAdmin("super_admin"),
+  validate(updateCategoryAttributeSchema),
+  categoryAttributeController.updateAttribute,
+);
+
+router.delete(
+  "/:categoryId/attributes/:attributeId",
+  protect,
+  sellerLimiter,
+  requirePlatformAdmin("super_admin"),
+  validate(categoryAttributeParamSchema),
+  categoryAttributeController.deleteAttribute,
 );
 
 export default router;

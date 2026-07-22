@@ -21,6 +21,8 @@ declare global {
   }
 }
 
+const ROLE_CACHE_TTL = 300;
+
 export const protect = async (req: Request, res: Response, next: NextFunction) => {
   const auth = req.headers.authorization;
 
@@ -31,45 +33,79 @@ export const protect = async (req: Request, res: Response, next: NextFunction) =
   const token = auth.split(" ")[1];
 
   try {
-    const payload = jwtService.verifyToken(token as string);
+    const payload = jwtService.verifyToken(token as string, "access");
 
     if (!payload.sub) throw new Error("Token missing user ID");
 
-    if (payload.jti) {
-      const blacklisted = await redis.get(RedisKeys.tokenBlacklist(payload.jti));
-      if (blacklisted) {
-        return res.status(401).json({ error: "Token revoked", code: "TOKEN_REVOKED" });
-      }
+    if (!payload.jti) throw new Error("Token missing session ID");
+
+    const blacklisted = await redis.get(RedisKeys.tokenBlacklist(payload.jti));
+    if (blacklisted) {
+      return res.status(401).json({ error: "Token revoked", code: "TOKEN_REVOKED" });
     }
 
-    const user = await db.user.findUnique({ where: { id: payload.sub } });
+    const roleCacheKey = RedisKeys.authContext(payload.sub);
+    const cachedCtx = await redis.get(roleCacheKey);
 
-    if (!user) throw new Error("User no longer exists");
-    if (!user.isActive) throw new Error("User account disabled");
+    let userCtx: {
+      id: string;
+      email: string | null;
+      name: string | null;
+      isActive: boolean;
+      sellerId?: string;
+      role: string;
+    };
 
-    const member = await db.sellerMember.findFirst({
-      where: { userId: user.id, isActive: true },
-      select: { sellerId: true },
-    });
+    if (cachedCtx) {
+      userCtx = JSON.parse(cachedCtx);
+      if (!userCtx.isActive) throw new Error("User account disabled");
+    } else {
+      const user = await db.user.findUnique({ where: { id: payload.sub } });
+      
+      if (!user) throw new Error("User no longer exists");
+      if (!user.isActive) throw new Error("User account disabled");
 
-    const platformMember = await db.platformMember.findFirst({
-      where: { userId: user.id },
-      include: { role: true },
-    });
+      const [member, platformMember] = await Promise.all([
+        db.sellerMember.findFirst({
+          where: { userId: user.id, isActive: true },
+          select: { sellerId: true },
+        }),
+
+        db.platformMember.findFirst({
+          where: { userId: user.id },
+          include: { role: true },
+        }),
+      ]);
 
     // Determine role: platform role takes precedence, then seller, then user
-    let role = "user";
-    if (platformMember?.role?.name) {
-      role = platformMember.role.name;
-    } else if (member?.sellerId) {
-      role = "seller";
+      let role = "user";
+      if (platformMember?.role?.name) {
+        role = platformMember.role.name;
+      } else if (member?.sellerId) {
+        role = "seller";
+      }
+
+      userCtx = {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        isActive: user.isActive,
+        sellerId: member?.sellerId,
+        role,
+      };
+
+      await redis.setex(roleCacheKey, ROLE_CACHE_TTL, JSON.stringify(userCtx));
     }
 
     req.user = {
-      ...user,
-      sellerId: member?.sellerId,
-      role,
+      id: userCtx.id,
+      email: userCtx.email ?? undefined,
+      name: userCtx.name ?? undefined,
+      sellerId: userCtx.sellerId,
+      role: userCtx.role,
     };
+    req.sessionId = payload.jti;
+
     next();
   } catch (error: any) {
     logger.warn({ ip: req.ip, userAgent: req.get("User-Agent") }, "Auth failed: " + error.message);
@@ -79,6 +115,9 @@ export const protect = async (req: Request, res: Response, next: NextFunction) =
     return res.status(401).json({ error: "Invalid token", code: "TOKEN_INVALID" });
   }
 };
+export async function invalidateAuthContext(userId: string) {
+  await redis.del(RedisKeys.authContext(userId));
+}
 
 export const restrictTo = (...allowedRoles: string[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -102,7 +141,8 @@ export const refreshAccessToken = async (req: Request, res: Response) => {
   }
 
   try {
-    const { accessToken, refreshToken: newRefreshToken } = jwtService.refreshToken(oldRefreshToken);
+    const { accessToken, refreshToken: newRefreshToken } =
+      await jwtService.refreshToken(oldRefreshToken);
 
     res.cookie("refreshToken", newRefreshToken, {
       httpOnly: true,
@@ -113,6 +153,14 @@ export const refreshAccessToken = async (req: Request, res: Response) => {
 
     return res.json({ accessToken });
   } catch (error: any) {
+    if (error.message === "Refresh token reuse detected") {
+      logger.error(
+        { ip: req.ip, userAgent: req.get("User-Agent") },
+        "SECURITY: refresh token reuse detected possible token theft"
+      );
+      return res.status(401).json({ error: "Session invalidated, please log in again" });
+    }
+
     logger.warn(
       { ip: req.ip, userAgent: req.get("User-Agent") },
       "Refresh token failed: " + error.message

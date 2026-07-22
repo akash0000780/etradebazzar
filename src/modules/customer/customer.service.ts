@@ -46,14 +46,17 @@ export const customerService = {
     });
 
     creditEngine.awardOnboardingBonus(result.id).catch(() => null);
-
-    const { accessToken, refreshToken } = jwtService.signTokens({
-      sub: result.id,
-      email: result.email,
-      role: "user",
+    const session = await db.session.create({
+      data: { userId: result.id },
     });
 
-    logger.info({ userId: result.id }, "Customer registered");
+    const { accessToken, refreshToken } = jwtService.signTokens({
+        sub: result.id,
+        email: result.email, 
+        role: "user",
+      },{ sessionId: session.id },);
+
+    logger.info({ userId: result.id, sessionId: session.id }, "Customer registered");
 
     return { user: result, accessToken, refreshToken };
   },
@@ -74,7 +77,7 @@ export const customerService = {
   },
 
   async updateProfile(userId: string, data: { name?: string }) {
-    const updated = db.user.update({ where: { id: userId }, data });
+    const updated = await db.user.update({ where: { id: userId }, data });
     creditEngine.checkProfileCompletion(userId).catch(() => null);
     return updated;
   },
@@ -84,7 +87,7 @@ export const customerService = {
     filters: { status?: string; page?: number; limit?: number },
   ) {
     const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
+    const limit = Math.min(filters.limit ?? 20, 100);
 
     const where: any = { customerId: userId };
     if (filters.status) where.status = filters.status;

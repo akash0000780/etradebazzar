@@ -2,6 +2,7 @@ import  { Request, Response, NextFunction } from "express";
 import { db } from "../db/index";
 import { redis, RedisKeys } from "../db/redis";
 import { logger } from "../utils/logger";
+import { runWithTenantContext, getTenantContext } from "./tenant-context";
 
 declare global {
   namespace Express {
@@ -15,10 +16,16 @@ declare global {
   }
 }
 
+export async function invalidateSellerStatusCache(sellerId: string) {
+  await redis.del(RedisKeys.sellerStatus(sellerId));
+}
+
 export const resolveTenant = async (req: Request, res: Response, next: NextFunction) => {
   const sellerId = req.user?.sellerId;
 
-  if (!sellerId) return next();
+  if (!sellerId) {
+    return runWithTenantContext({}, next);
+  }
 
   try {
     const cached = await redis.get(RedisKeys.sellerStatus(sellerId));
@@ -47,16 +54,96 @@ export const resolveTenant = async (req: Request, res: Response, next: NextFunct
       return res.status(403).json({ error: "Seller account not approved" });
     }
 
-    await db.$executeRaw`SELECT set_config('app.current_seller', ${sellerId}, true)`;
-
-    next();
+    runWithTenantContext({ sellerId }, next);
   } catch (error: any) {
     logger.error({ err: error.message }, "Tenant resolution failed");
     return res.status(500).json({ error: "Internal server error" });
   }
 };
 
-export const setPlatformAdmin = async (req: Request, res: Response, next: NextFunction) => {
-  await db.$executeRaw`SELECT set_config('app.is_platform_admin', 'true', true)`;
-  next();
+export const requirePlatformAdmin = (...roles: string[]) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+
+    try {
+      const cacheKey = RedisKeys.userRoles(req.user.id, "platform");
+      const cached = await redis.get(cacheKey);
+
+      let platformRole: string | null = null;
+      if (cached) {
+        platformRole = cached;
+      } else {
+        const member = await db.platformMember.findUnique({
+          where: { userId: req.user.id },
+          select: { role: { select: { name: true } } },
+        });
+        platformRole = member?.role.name ?? null;
+        if (platformRole) {
+          await redis.setex(cacheKey, 300, platformRole);
+        }
+      }
+
+      if (!platformRole || !roles.includes(platformRole)) {
+        logger.warn(
+          { actorId: req.user.id, requiredRoles: roles, path: req.originalUrl },
+          "Platform admin RBAC denied"
+        );
+        return res.status(403).json({ error: "Insufficient platform permissions" });
+      }
+
+      return runWithTenantContext({ isPlatformAdmin: true }, next);
+    } catch (error: any) {
+      logger.error({ err: error.message }, "Platform admin check failed");
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  };
 };
+
+/** @deprecated use requirePlatformAdmin(...roles) instead
+ */
+export const setPlatformAdmin = (req: Request, res: Response, next: NextFunction) => {
+  logger.warn({ path: req.originalUrl }, "DEPRECATED setPlatformAdmin used - migrate to requirePlatformAdmin");
+  runWithTenantContext({ isPlatformAdmin: true }, next);
+};
+
+export async function withTenantScope<T>(
+  fn: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<T>
+): Promise<T> {
+  const ctx = getTenantContext();
+
+  return db.$transaction(async (tx) => {
+    if (ctx.isPlatformAdmin) {
+      await tx.$executeRaw`SELECT set_config('app.is_platform_admin', 'true', true)`;
+    } else if (ctx.sellerId) {
+      await tx.$executeRaw`SELECT set_config('app.current_seller', ${ctx.sellerId}, true)`;
+    } else {
+      throw new Error("withTenantScope called with no tenant context - refusing to run unscoped query on RLS-protected table");
+    }
+    return fn(tx);
+  });
+}
+
+export async function withSystemScope<T>(
+  fn: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<T>
+): Promise<T> {
+  return db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('app.is_system_operation', 'true', true)`;
+    return fn(tx);
+  });
+}
+
+export async function withOptionalTenantScope<T>(
+  fn: (tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) => Promise<T>
+): Promise<T> {
+  const ctx = getTenantContext();
+  return db.$transaction(async (tx) => {
+    if (ctx.isPlatformAdmin) {
+      await tx.$executeRaw`SELECT set_config('app.is_platform_admin', 'true', true)`;
+    } else if (ctx.sellerId) {
+      await tx.$executeRaw`SELECT set_config('app.current_seller', ${ctx.sellerId}, true)`;
+    }
+    return fn(tx);
+  });
+}

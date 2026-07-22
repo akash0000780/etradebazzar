@@ -37,6 +37,14 @@ export const printAreaService = {
         const product = await db.product.findFirst({ where: { id: productId, sellerId } });
         if (!product) throw new Error("Product not found");
 
-        return db.printArea.delete({ where: { productId } }).catch(() => null);
+        try {
+            await db.printArea.delete({ where: { productId } });
+            return { deleted: true };
+        } catch (err: any) {
+            if (err.code === "P2025") {
+                return { deleted: false };
+            }
+            throw err;
+        }
     },
 };

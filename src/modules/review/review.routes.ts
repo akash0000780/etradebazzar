@@ -2,8 +2,8 @@ import { Router } from "express";
 import multer from "multer";
 import { reviewController } from "./review.controller";
 import { protect } from "../../middleware/auth";
-import { resolveTenant, setPlatformAdmin } from "../../middleware/tenant";
-import { requirePlatformRole, requireSellerRole } from "../../middleware/rbac";
+import { resolveTenant, requirePlatformAdmin } from "../../middleware/tenant";
+import { requireSellerRole } from "../../middleware/rbac";
 import { validate } from "../../utils/validate";
 import { publicLimiter, sellerLimiter, uploadLimiter } from "../../middleware/rate-limit";
 import {
@@ -68,8 +68,7 @@ router.get(
     "/pending",
     protect,
     sellerLimiter,
-    setPlatformAdmin,
-    requirePlatformRole("super_admin", "product_reviewer"),
+    requirePlatformAdmin("super_admin", "product_reviewer"),
     reviewController.listPendingReviews
 );
 
@@ -77,8 +76,7 @@ router.patch(
     "/:reviewId/moderate",
     protect,
     sellerLimiter,
-    setPlatformAdmin,
-    requirePlatformRole("super_admin", "product_reviewer"),
+    requirePlatformAdmin("super_admin", "product_reviewer"),
     validate(moderateReviewSchema),
     reviewController.moderateReview
 );

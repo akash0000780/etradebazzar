@@ -98,11 +98,21 @@ export const platformService = {
   async updateMemberRole(actorId: string, memberId: string, roleId: string) {
     const member = await db.platformMember.findUnique({
       where: { id: memberId },
+      include: { role: true },
     });
     if (!member) throw new Error("Member not found");
 
     const role = await db.platformRole.findUnique({ where: { id: roleId } });
     if (!role) throw new Error("Role not found");
+
+    if (member.role.name === "super_admin" && role.name !== "super_admin") {
+      const superAdminCount = await db.platformMember.count({
+        where: { role: { name: "super_admin" } },
+      });
+      if (superAdminCount <= 1) {
+        throw new Error("Cannot remove last super_admin");
+      }
+    }
 
     const updated = await db.platformMember.update({
       where: { id: memberId },
@@ -187,15 +197,28 @@ export const platformService = {
     sellerId?: string;
     actorId?: string;
     action?: string;
+    page?: number;
+    limit?: number;
   }) {
-    return db.auditLog.findMany({
-      where: {
-        ...(filters.sellerId && { sellerId: filters.sellerId }),
-        ...(filters.actorId && { actorId: filters.actorId }),
-        ...(filters.action && { action: filters.action }),
-      },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-    });
+    const page = filters.page ?? 1;
+    const limit = Math.min(filters.limit ?? 100, 100);
+
+    const where = {
+      ...(filters.sellerId && { sellerId: filters.sellerId }),
+      ...(filters.actorId && { actorId: filters.actorId }),
+      ...(filters.action && { action: filters.action }),
+    };
+
+    const [data, total] = await Promise.all([
+      db.auditLog.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      db.auditLog.count({ where }),
+    ]);
+
+    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) || 1 } };
   },
 };

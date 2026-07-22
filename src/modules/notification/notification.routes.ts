@@ -10,7 +10,7 @@ import {
 
 const router = Router();
 
-router.get("/stream", protect, notificationController.stream);
+router.get("/stream", protect, sellerLimiter, notificationController.stream);
 
 router.get(
   "/",

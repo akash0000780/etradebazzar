@@ -1,4 +1,11 @@
 import { db } from "../../db/index";
+import type { CategoryAttributeInput } from "./category-attribute.schema";
+
+const ATTRIBUTE_UNIQUE_CONSTRAINT = "category_attributes_categoryId_key_key";
+
+function isUniqueConstraintError(err: any, constraintName: string): boolean {
+  return err?.code === "P2002" && err?.meta?.target?.includes?.(constraintName);
+}
 
 function generateSlug(name: string): string {
   return name
@@ -9,11 +16,26 @@ function generateSlug(name: string): string {
     .replace(/-+/g, "-");
 }
 
+function toAttributeCreateData(categoryId: string, attr: CategoryAttributeInput) {
+  return {
+    categoryId,
+    key: attr.key,
+    label: attr.label,
+    type: attr.type,
+    required: attr.required,
+    isVariant: attr.isVariant,
+    options: attr.options,
+    unit: attr.unit,
+    sortOrder: attr.sortOrder,
+  };
+}
+
 export const categoryService = {
   async createCategory(data: {
     name: string;
     description?: string;
     parentId?: string;
+    attributes?: CategoryAttributeInput[];
   }) {
     const slug = generateSlug(data.name);
 
@@ -27,19 +49,44 @@ export const categoryService = {
       if (!parent) throw new Error("Parent category not found");
     }
 
-    return db.category.create({
-      data: {
-        name: data.name,
-        slug,
-        description: data.description,
-        parentId: data.parentId,
-      },
-    });
+    try {
+      return await db.$transaction(async (tx) => {
+        const category = await tx.category.create({
+          data: {
+            name: data.name,
+            slug,
+            description: data.description,
+            parentId: data.parentId,
+          },
+        });
+
+        if (data.attributes?.length) {
+          await tx.categoryAttribute.createMany({
+            data: data.attributes.map((attr) => toAttributeCreateData(category.id, attr)),
+          });
+        }
+
+        return tx.category.findUniqueOrThrow({
+          where: { id: category.id },
+          include: { attributes: { orderBy: { sortOrder: "asc" } } },
+        });
+      });
+    } catch (err: any) {
+      if (isUniqueConstraintError(err, ATTRIBUTE_UNIQUE_CONSTRAINT)) {
+        throw new Error("Duplicate attribute key in request");
+      }
+      throw err;
+    }
   },
 
   async updateCategory(
     categoryId: string,
-    data: { name?: string; description?: string; parentId?: string },
+    data: {
+      name?: string;
+      description?: string;
+      parentId?: string;
+      attributes?: CategoryAttributeInput[];
+    },
   ) {
     const category = await db.category.findUnique({
       where: { id: categoryId },
@@ -56,12 +103,48 @@ export const categoryService = {
       if (!parent) throw new Error("Parent category not found");
     }
 
-    const updateData: any = { ...data };
+    const updateData: any = {
+      name: data.name,
+      description: data.description,
+      parentId: data.parentId,
+    };
     if (data.name) {
       updateData.slug = generateSlug(data.name);
     }
 
-    return db.category.update({ where: { id: categoryId }, data: updateData });
+    try {
+      return await db.$transaction(async (tx) => {
+        await tx.category.update({ where: { id: categoryId }, data: updateData });
+
+        if (data.attributes?.length) {
+          for (const attr of data.attributes) {
+            await tx.categoryAttribute.upsert({
+              where: { categoryId_key: { categoryId, key: attr.key } },
+              create: toAttributeCreateData(categoryId, attr),
+              update: {
+                label: attr.label,
+                type: attr.type,
+                required: attr.required,
+                isVariant: attr.isVariant,
+                options: attr.options,
+                unit: attr.unit,
+                sortOrder: attr.sortOrder,
+              },
+            });
+          }
+        }
+
+        return tx.category.findUniqueOrThrow({
+          where: { id: categoryId },
+          include: { attributes: { orderBy: { sortOrder: "asc" } } },
+        });
+      });
+    } catch (err: any) {
+      if (isUniqueConstraintError(err, ATTRIBUTE_UNIQUE_CONSTRAINT)) {
+        throw new Error("Duplicate attribute key in request");
+      }
+      throw err;
+    }
   },
 
   async deleteCategory(categoryId: string) {

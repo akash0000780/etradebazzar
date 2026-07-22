@@ -12,13 +12,23 @@ const STATUS_MAP: Record<string, PayoutResult["status"]> = {
     cancelled: "cancelled",
 };
 
+function timingSafeEqualStr(a: string, b: string): boolean {
+    const bufA = Buffer.from(a, "utf8");
+    const bufB = Buffer.from(b, "utf8");
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export class RazorpayXInstance implements PayoutProvider {
     private keyId: string;
     private keySecret: string;
 
-    constructor(keyId: string, keySecret: string) {
+    private sourceAccountNumber: string;
+
+    constructor(keyId: string, keySecret: string, sourceAccountNumber: string) {
         this.keyId = keyId;
         this.keySecret = keySecret;
+        this.sourceAccountNumber = sourceAccountNumber;
     }
 
     private get authHeader(): string {
@@ -88,7 +98,7 @@ export class RazorpayXInstance implements PayoutProvider {
         const payout = await this.request<any>("/payouts", {
             method: "POST",
             body: JSON.stringify({
-                account_number: input.fundAccountId,
+                account_number: this.sourceAccountNumber,
                 fund_account_id: input.fundAccountId,
                 amount: Math.round(input.amount * 100), // paise
                 currency: input.currency,
@@ -108,6 +118,49 @@ export class RazorpayXInstance implements PayoutProvider {
         };
     }
 
+
+    async validateFundAccount(
+        fundAccountId: string,
+        amountPaise = 100,
+    ): Promise<{
+        validationId: string;
+        status: "created" | "completed" | "failed";
+        accountStatus: "active" | "inactive" | null;
+        registeredName: string | null;
+        raw: any;
+    }> {
+        let validation = await this.request<any>("/fund_accounts/validations", {
+            method: "POST",
+            body: JSON.stringify({
+                account_number: this.sourceAccountNumber,
+                fund_account: { id: fundAccountId },
+                amount: amountPaise,
+                currency: "INR",
+            }),
+        });
+
+        const maxAttempts = 5;
+        for (let attempt = 0; attempt < maxAttempts && validation.status === "created"; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            validation = await this.request<any>(`/fund_accounts/validations/${validation.id}`);
+        }
+
+        return {
+            validationId: validation.id,
+            status: validation.status,
+            accountStatus: validation.results?.account_status ?? null,
+            registeredName: validation.results?.registered_name ?? null,
+            raw: validation,
+        };
+    }
+
+    async deactivateFundAccount(fundAccountId: string): Promise<void> {
+        await this.request(`/fund_accounts/${fundAccountId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ active: false }),
+        });
+    }
+
     async getPayout(razorpayPayoutId: string): Promise<PayoutResult> {
         const payout = await this.request<any>(`/payouts/${razorpayPayoutId}`);
 
@@ -119,18 +172,22 @@ export class RazorpayXInstance implements PayoutProvider {
         };
     }
 
-    async handleWebhook(payload: any, signature: string, webhookSecret: string): Promise<WebhookResult> {
+    async handleWebhook(payload: Buffer | string, signature: string, webhookSecret: string): Promise<WebhookResult> {
+        const rawBody = Buffer.isBuffer(payload) ? payload.toString("utf8") : payload;
+
         const expected = crypto
             .createHmac("sha256", webhookSecret)
-            .update(JSON.stringify(payload))
+            .update(rawBody)
             .digest("hex");
 
-        if (expected !== signature) {
+        if (!timingSafeEqualStr(expected, signature)) {
             throw new Error("Invalid webhook signature");
         }
 
-        const event = payload.event as string;
-        const entity = payload.payload?.payout?.entity;
+        const parsedPayload = JSON.parse(rawBody);
+
+        const event = parsedPayload.event as string;
+        const entity = parsedPayload.payload?.payout?.entity;
 
         if (!entity) throw new Error("Invalid webhook payload");
 
@@ -146,7 +203,7 @@ export class RazorpayXInstance implements PayoutProvider {
             status: statusMap[event] ?? "failed",
             utrRef: entity.utr ?? null,
             failureReason: entity.error?.description ?? null,
-            raw: payload,
+            raw: parsedPayload,
         };
     }
 }

@@ -44,5 +44,5 @@ export interface PaymentGateway {
     createOrder(data: CreateOrderInput): Promise<GatewayOrder>;
     verifyPayment(data: VerifyInput): Promise<boolean>;
     initiateRefund(data: RefundInput): Promise<GatewayRefund>;
-    handleWebhook(payload: any, signature: string): Promise<WebhookResult>;
+    handleWebhook(payload: Buffer | string, signature: string): Promise<WebhookResult>;
 }

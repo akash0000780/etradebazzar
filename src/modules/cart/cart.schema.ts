@@ -17,6 +17,7 @@ export const cartItemParamSchema = z.object({ params: z.object({ itemId: z.strin
 
 export const checkoutSchema = z.object({
     body: z.object({
+        idempotencyKey: z.string().uuid("idempotencyKey must be a valid UUID"),
         addressId: z.string().optional(),
         newAddress: z.object({
             receiverName: z.string().min(2),

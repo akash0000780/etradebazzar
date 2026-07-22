@@ -1,114 +1,212 @@
 import dotenv from "dotenv";
+import { z } from "zod";
+
 dotenv.config();
 
-interface Config {
-  nodeEnv: string;
-  port: number;
-  databaseUrl: string;
-  redisUrl: string;
+const isProd = process.env.NODE_ENV === "production";
 
-  jwtPrivateKey: string;
-  jwtPublicKey: string;
-  jwtIssuer: string;
-  jwtAudience: string;
-  jwtSecret?: string;
+const envSchema = z.object({
+  NODE_ENV: z
+    .enum(["development", "production", "test"])
+    .default("development"),
+  PORT: z.coerce.number().int().positive().default(3000),
 
-  accessTokenExpiresIn: string;
-  refreshTokenExpiresIn: string;
-  allowedOrigins?: string[];
+  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  DATABASE_URL_ADMIN: z.string().min(1, "DATABASE_URL_ADMIN is required"),
+  REDIS_URL: z.string().min(1, "REDIS_URL is required"),
 
-  encryptionKey: string;
+  JWT_PRIVATE_KEY: z.string().optional().default(""),
+  JWT_PUBLIC_KEY: z.string().optional().default(""),
+  JWT_ISSUER: z.string().default("https://yourdomain.com"),
+  JWT_AUDIENCE: z.string().default("https://yourdomain.com"),
+  JWT_SECRET: z.string().optional(),
 
-  shiprocketBaseUrl: string;
-  shiprocketEmail: string;
-  shiprocketPassword: string;
-  shiprocketWebhookSecret: string;
-  
-  razorpayKeyId: string;
-  razorpayKeySecret: string;
-  razorpayWebhookSecret: string;
+  ACCESS_TOKEN_EXPIRES_IN: z.string().default("15m"),
+  REFRESH_TOKEN_EXPIRES_IN: z.string().default("7d"),
 
-  resendApiToken: string;
-  companyEmail: string;
+  ALLOWED_ORIGINS: z.string().optional(),
 
-  msg91BaseUrl: string;
-  msg91AuthKey: string;
-  msg91SenderId: string;
-  msg91OtpTemplateId: string;
-  msg91OrderPlacedTemplateId: string;
-  msg91ShipmentTemplateId: string;
+  ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/i, "ENCRYPTION_KEY must be a 64-char hex string (32 bytes)"),
 
-  appUrl: string;
+  SHIPROCKET_EMAIL: z.string().min(1),
+  SHIPROCKET_PASSWORD: z.string().min(1),
+  SHIPROCKET_WEBHOOK_SECRET: z.string().min(1),
 
-  // AWS S3
-  awsRegion: string;
-  awsAccessKeyId: string;
-  awsSecretAccessKey: string;
-  awsS3Bucket: string;
-  awsCdnUrl: string;
+  RAZORPAY_KEY_ID: z.string().min(1),
+  RAZORPAY_KEY_SECRET: z.string().min(1),
+  RAZORPAY_WEBHOOK_SECRET: z.string().min(1),
 
-  // DigitalOcean Spaces
-  doSpacesRegion: string;
-  doSpacesKey: string;
-  doSpacesSecret: string;
-  doSpacesBucket: string;
-  doSpacesCdnUrl: string;
+  RESEND_API_TOKEN: z.string().min(1),
+  COMPANY_EMAIL: z.string().email(),
+
+  MSG91_AUTH_KEY: z.string().min(1),
+  MSG91_SENDER_ID: z.string().min(1),
+  MSG91_OTP_TEMPLATE_ID: z.string().min(1),
+  MSG91_ORDER_PLACED_TEMPLATE_ID: z.string().min(1),
+  MSG91_SHIPMENT_TEMPLATE_ID: z.string().min(1),
+
+  APP_URL: z.string().url(),
+
+  STORAGE_PROVIDER: z.enum(["aws", "do", "railway"]),
+
+  AWS_REGION: z.string().optional(),
+  AWS_ACCESS_KEY_ID: z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+  AWS_S3_BUCKET: z.string().optional(),
+  AWS_CDN_URL: z.string().optional().default(""),
+
+  DO_SPACES_REGION: z.string().optional(),
+  DO_SPACES_KEY: z.string().optional(),
+  DO_SPACES_SECRET: z.string().optional(),
+  DO_SPACES_BUCKET: z.string().optional(),
+  DO_SPACES_CDN_URL: z.string().optional().default(""),
+  RAILWAY_BUCKET_ENDPOINT: z.string().optional(),
+  RAILWAY_BUCKET_REGION: z.string().optional().default("us-east-1"),
+  RAILWAY_BUCKET_ACCESS_KEY_ID: z.string().optional(),
+  RAILWAY_BUCKET_SECRET_ACCESS_KEY: z.string().optional(),
+  RAILWAY_BUCKET_NAME: z.string().optional(),
+  RAILWAY_BUCKET_CDN_URL: z.string().optional().default(""),
+}).superRefine((data, ctx) => {
+  const requireFields = (fields: Record<string, string | undefined>, providerLabel: string) => {
+    for (const [key, value] of Object.entries(fields)) {
+      if (!value || value.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `${key} is required when STORAGE_PROVIDER="${providerLabel}"`,
+        });
+      }
+    }
+  };
+
+  if (data.STORAGE_PROVIDER === "aws") {
+    requireFields({
+      AWS_REGION: data.AWS_REGION,
+      AWS_ACCESS_KEY_ID: data.AWS_ACCESS_KEY_ID,
+      AWS_SECRET_ACCESS_KEY: data.AWS_SECRET_ACCESS_KEY,
+      AWS_S3_BUCKET: data.AWS_S3_BUCKET,
+    }, "aws");
+  }
+
+  if (data.STORAGE_PROVIDER === "do") {
+    requireFields({
+      DO_SPACES_REGION: data.DO_SPACES_REGION,
+      DO_SPACES_KEY: data.DO_SPACES_KEY,
+      DO_SPACES_SECRET: data.DO_SPACES_SECRET,
+      DO_SPACES_BUCKET: data.DO_SPACES_BUCKET,
+    }, "do");
+  }
+
+  if (data.STORAGE_PROVIDER === "railway") {
+    requireFields({
+      RAILWAY_BUCKET_ENDPOINT: data.RAILWAY_BUCKET_ENDPOINT,
+      RAILWAY_BUCKET_ACCESS_KEY_ID: data.RAILWAY_BUCKET_ACCESS_KEY_ID,
+      RAILWAY_BUCKET_SECRET_ACCESS_KEY: data.RAILWAY_BUCKET_SECRET_ACCESS_KEY,
+      RAILWAY_BUCKET_NAME: data.RAILWAY_BUCKET_NAME,
+    }, "railway");
+  }
+});
+
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  const issues = parsed.error.issues
+    .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+    .join("\n");
+  console.error(`Invalid environment configuration:\n${issues}`);
+  process.exit(1);
+}
+
+const env = parsed.data;
+
+const hasRsaKeys = env.JWT_PRIVATE_KEY.length > 0 && env.JWT_PUBLIC_KEY.length > 0;
+const hasStrongSecret = !!env.JWT_SECRET && env.JWT_SECRET.length >= 32;
+
+if (!hasRsaKeys && !hasStrongSecret) {
+  console.error(
+    "JWT config error: provide JWT_PRIVATE_KEY + JWT_PUBLIC_KEY (RS256) OR a strong JWT_SECRET (>=32 chars)"
+  );
+  process.exit(1);
+}
+
+if (!hasRsaKeys && isProd) {
+  console.warn("JWT: no RSA keys configured in production — using HS256 fallback, not recommended");
+}
+
+const allowedOrigins = env.ALLOWED_ORIGINS?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
+
+if (allowedOrigins.length === 0 && isProd) {
+  console.error("ALLOWED_ORIGINS must be set explicitly in production (wildcard is not permitted)");
+  process.exit(1);
+}
+
+if (allowedOrigins.includes("*") && isProd) {
+  console.error("ALLOWED_ORIGINS cannot be '*' in production when credentials are enabled");
+  process.exit(1);
 }
 
 export const config = {
-  nodeEnv: process.env.NODE_ENV || "development",
-  port: Number(process.env.PORT) || 3000,
+  nodeEnv: env.NODE_ENV,
+  port: env.PORT,
 
-  databaseUrl: process.env.DATABASE_URL!,
-  redisUrl: process.env.REDIS_URL!,
+  databaseUrl: env.DATABASE_URL,
+  databaseUrlAdmin: env.DATABASE_URL_ADMIN,
+  redisUrl: env.REDIS_URL,
 
-  jwtPrivateKey: (process.env.JWT_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
-  jwtPublicKey: (process.env.JWT_PUBLIC_KEY || "").replace(/\\n/g, "\n"),
-  jwtIssuer: process.env.JWT_ISSUER || "https://yourdomain.com",
-  jwtAudience: process.env.JWT_AUDIENCE || "https://yourdomain.com",
-  jwtSecret: process.env.JWT_SECRET,
+  jwtPrivateKey: env.JWT_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  jwtPublicKey: env.JWT_PUBLIC_KEY.replace(/\\n/g, "\n"),
+  jwtIssuer: env.JWT_ISSUER,
+  jwtAudience: env.JWT_AUDIENCE,
+  jwtSecret: env.JWT_SECRET,
 
-  accessTokenExpiresIn: process.env.ACCESS_TOKEN_EXPIRES_IN || "15m",
-  refreshTokenExpiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN || "7d",
+  accessTokenExpiresIn: env.ACCESS_TOKEN_EXPIRES_IN,
+  refreshTokenExpiresIn: env.REFRESH_TOKEN_EXPIRES_IN,
 
-  allowedOrigins:
-    process.env.ALLOWED_ORIGINS?.split(",").map((s) => s.trim()) || ["*"],
+  allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : (isProd ? [] : ["*"]),
 
-  encryptionKey: process.env.ENCRYPTION_KEY!,
+  encryptionKey: env.ENCRYPTION_KEY,
 
   shiprocketBaseUrl: "https://apiv2.shiprocket.in/v1/external",
-  shiprocketEmail: process.env.SHIPROCKET_EMAIL!,
-  shiprocketPassword: process.env.SHIPROCKET_PASSWORD!,
-  shiprocketWebhookSecret: process.env.SHIPROCKET_WEBHOOK_SECRET!,
-  razorpayKeyId: process.env.RAZORPAY_KEY_ID!,
-  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET!,
-  razorpayWebhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET!,
+  shiprocketEmail: env.SHIPROCKET_EMAIL,
+  shiprocketPassword: env.SHIPROCKET_PASSWORD,
+  shiprocketWebhookSecret: env.SHIPROCKET_WEBHOOK_SECRET,
 
-  resendApiToken: process.env.RESEND_API_TOKEN!,
-  companyEmail: process.env.COMPANY_EMAIL!,
+  razorpayKeyId: env.RAZORPAY_KEY_ID,
+  razorpayKeySecret: env.RAZORPAY_KEY_SECRET,
+  razorpayWebhookSecret: env.RAZORPAY_WEBHOOK_SECRET,
+
+  resendApiToken: env.RESEND_API_TOKEN,
+  companyEmail: env.COMPANY_EMAIL,
 
   msg91BaseUrl: "https://api.msg91.com/api/v5",
-  msg91AuthKey: process.env.MSG91_AUTH_KEY!,
-  msg91SenderId: process.env.MSG91_SENDER_ID!,
-  msg91OtpTemplateId: process.env.MSG91_OTP_TEMPLATE_ID!,
-  msg91OrderPlacedTemplateId:
-    process.env.MSG91_ORDER_PLACED_TEMPLATE_ID!,
-  msg91ShipmentTemplateId:
-    process.env.MSG91_SHIPMENT_TEMPLATE_ID!,
+  msg91AuthKey: env.MSG91_AUTH_KEY,
+  msg91SenderId: env.MSG91_SENDER_ID,
+  msg91OtpTemplateId: env.MSG91_OTP_TEMPLATE_ID,
+  msg91OrderPlacedTemplateId: env.MSG91_ORDER_PLACED_TEMPLATE_ID,
+  msg91ShipmentTemplateId: env.MSG91_SHIPMENT_TEMPLATE_ID,
 
-  appUrl: process.env.APP_URL!,
+  appUrl: env.APP_URL,
 
-  // AWS S3
-  awsRegion: process.env.AWS_REGION!,
-  awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-  awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  awsS3Bucket: process.env.AWS_S3_BUCKET!,
-  awsCdnUrl: process.env.AWS_CDN_URL || "",
+  storageProvider: env.STORAGE_PROVIDER,
 
-  // DigitalOcean Spaces
-  doSpacesRegion: process.env.DO_SPACES_REGION!,
-  doSpacesKey: process.env.DO_SPACES_KEY!,
-  doSpacesSecret: process.env.DO_SPACES_SECRET!,
-  doSpacesBucket: process.env.DO_SPACES_BUCKET!,
-  doSpacesCdnUrl: process.env.DO_SPACES_CDN_URL || "",
-} as const satisfies Config;
+  awsRegion: env.AWS_REGION ?? "",
+  awsAccessKeyId: env.AWS_ACCESS_KEY_ID ?? "",
+  awsSecretAccessKey: env.AWS_SECRET_ACCESS_KEY ?? "",
+  awsS3Bucket: env.AWS_S3_BUCKET ?? "",
+  awsCdnUrl: env.AWS_CDN_URL,
+
+  doSpacesRegion: env.DO_SPACES_REGION ?? "",
+  doSpacesKey: env.DO_SPACES_KEY ?? "",
+  doSpacesSecret: env.DO_SPACES_SECRET ?? "",
+  doSpacesBucket: env.DO_SPACES_BUCKET ?? "",
+  doSpacesCdnUrl: env.DO_SPACES_CDN_URL,
+
+  railwayBucketEndpoint: env.RAILWAY_BUCKET_ENDPOINT ?? "",
+  railwayBucketRegion: env.RAILWAY_BUCKET_REGION,
+  railwayBucketAccessKeyId: env.RAILWAY_BUCKET_ACCESS_KEY_ID ?? "",
+  railwayBucketSecretAccessKey: env.RAILWAY_BUCKET_SECRET_ACCESS_KEY ?? "",
+  railwayBucketName: env.RAILWAY_BUCKET_NAME ?? "",
+  railwayBucketCdnUrl: env.RAILWAY_BUCKET_CDN_URL,
+} as const;

@@ -1,9 +1,36 @@
 import { db } from "../../db";
 import { generateDisplayId } from "../../lib/uid/uid.generator";
 
+import { withTenantScope } from "../../middleware/tenant";
 import { shopAccessService } from "./shop-access.service";
 import { StorageFactory } from "../../lib/storage/storage.factory";
+import { PincodeFactory } from "../../lib/location/pincode.factory";
 import { logger } from "../../utils/logger";
+
+async function resolvePickupCityState(
+  pincode: string,
+  city: string | undefined,
+  state: string | undefined,
+): Promise<{ city: string; state: string }> {
+  if (city && state) return { city, state };
+
+  try {
+    const pincodeProvider = PincodeFactory.get();
+    const pincodeDetails = await pincodeProvider.lookupByPincode(pincode);
+
+    if (!city) city = pincodeDetails.city;
+    if (!state) state = pincodeDetails.state;
+  } catch (error: any) {
+    logger.warn({ err: error.message, pincode }, "Failed to auto-fill pickup city/state from pincode");
+  }
+
+  if (!city || !state) {
+    throw new Error("Pickup city and state could not be determined from the provided pincode. Please provide them manually.");
+  }
+
+  return { city, state };
+}
+
 function generateSlug(name: string): string {
   return name
     .toLowerCase()
@@ -13,14 +40,6 @@ function generateSlug(name: string): string {
     .replace(/-+/g, "-");
 }
 
-async function uniqueSlug(name: string): Promise<string> {
-  let slug = generateSlug(name);
-  const existing = await db.shop.findUnique({ where: { slug } });
-  if (existing) {
-    slug = `${slug}-${Date.now()}`;
-  }
-  return slug;
-}
 export async function resolveShopMediaUrls<T extends { logo?: string | null; logoKey?: string | null; banner?: string | null; bannerKey?: string | null }>(
   shop: T,
 ): Promise<T> {
@@ -51,8 +70,8 @@ export const shopService = {
       contactPhone: string;
       returnPolicy?: string;
       pickupStreet: string;
-      pickupCity: string;
-      pickupState: string;
+      pickupCity?: string;
+      pickupState?: string;
       pickupPincode: string;
     },
   ) {
@@ -60,30 +79,42 @@ export const shopService = {
     if (!seller) throw new Error("Seller not found");
     if (seller.status !== "APPROVED") throw new Error("Seller not approved");
 
-    const slug = await uniqueSlug(data.name);
+    const { city: pickupCity, state: pickupState } = await resolvePickupCityState(
+      data.pickupPincode, data.pickupCity, data.pickupState,
+    );
+
+    const baseSlug = generateSlug(data.name);
     const displayId = await generateDisplayId("shop");
 
-    const shop = await db.$transaction(async (tx) => {
-      const newShop = await tx.shop.create({
-        data: { sellerId, slug, displayId, status: "APPROVED", ...data },
+    try {
+      return await withTenantScope(async (tx) => {
+        const slug = `${baseSlug}-${Date.now()}`;
+
+
+        const newShop = await tx.shop.create({
+          data: { sellerId, slug, displayId, status: "APPROVED", ...data, pickupCity, pickupState },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            sellerId,
+            actorId,
+            actorType: "seller",
+            action: "SHOP_CREATED",
+            entityType: "shop",
+            entityId: newShop.id,
+            metadata: { name: data.name },
+          },
+        });
+
+        return newShop;
       });
-
-      await tx.auditLog.create({
-        data: {
-          sellerId,
-          actorId,
-          actorType: "seller",
-          action: "SHOP_CREATED",
-          entityType: "shop",
-          entityId: newShop.id,
-          metadata: { name: data.name },
-        },
-      });
-
-      return newShop;
-    });
-
-    return shop;
+    } catch (err: any) {
+      if (err.code === "P2002") {
+        throw new Error("A shop with a conflicting slug already exists, please try again");
+      }
+      throw err;
+    }
   },
 
   async updateShop(
@@ -107,41 +138,76 @@ export const shopService = {
       pickupPincode: string;
     }>,
   ) {
-    const shop = await db.shop.findFirst({ where: { id: shopId, sellerId } });
-    if (!shop) throw new Error("Shop not found");
-    if (shop.status === "REJECTED")
-      throw new Error("Cannot update rejected shop");
-
     const updateData: any = { ...data };
     if (data.name) {
-      updateData.slug = await uniqueSlug(data.name);
+      updateData.slug = `${generateSlug(data.name)}-${Date.now()}`;
     }
 
-    const oldLogoKey =
-      data.logoKey && data.logoKey !== shop.logoKey ? shop.logoKey : null;
-    const oldBannerKey =
-      data.bannerKey && data.bannerKey !== shop.bannerKey ? shop.bannerKey : null;
+    let oldLogoKey: string | null = null;
+    let oldBannerKey: string | null = null;
 
-    const updated = await db.$transaction(async (tx) => {
-      const updatedShop = await tx.shop.update({
-        where: { id: shopId },
-        data: updateData,
+    if (
+      (data.pickupPincode && (!data.pickupCity || !data.pickupState)) ||
+      data.logoKey ||
+      data.bannerKey
+    ) {
+      const existing = await db.shop.findFirst({
+        where: { id: shopId, sellerId },
+        select: { pickupPincode: true, logoKey: true, bannerKey: true },
       });
 
-      await tx.auditLog.create({
-        data: {
-          sellerId,
-          actorId,
-          actorType: "seller",
-          action: "SHOP_UPDATED",
-          entityType: "shop",
-          entityId: shopId,
-          metadata: data,
-        },
-      });
+      if (existing) {
+        if (
+          data.pickupPincode &&
+          (!data.pickupCity || !data.pickupState) &&
+          existing.pickupPincode !== data.pickupPincode
+        ) {
+          const { city, state } = await resolvePickupCityState(
+            data.pickupPincode, data.pickupCity, data.pickupState,
+          );
+          updateData.pickupCity = city;
+          updateData.pickupState = state;
+        }
 
-      return updatedShop;
-    });
+        if (data.logoKey && data.logoKey !== existing.logoKey) oldLogoKey = existing.logoKey;
+        if (data.bannerKey && data.bannerKey !== existing.bannerKey) oldBannerKey = existing.bannerKey;
+      }
+    }
+
+    let updated: any;
+    try {
+      updated = await withTenantScope(async (tx) => {
+        const updateResult = await tx.shop.updateMany({
+          where: { id: shopId, sellerId, status: { not: "REJECTED" } },
+          data: updateData,
+        });
+
+        if (updateResult.count === 0) {
+          const exists = await tx.shop.findFirst({ where: { id: shopId, sellerId } });
+          if (!exists) throw new Error("Shop not found");
+          throw new Error("Cannot update rejected shop");
+        }
+
+        await tx.auditLog.create({
+          data: {
+            sellerId,
+            actorId,
+            actorType: "seller",
+            action: "SHOP_UPDATED",
+            entityType: "shop",
+            entityId: shopId,
+            metadata: data,
+          },
+        });
+
+        return tx.shop.findUniqueOrThrow({ where: { id: shopId } });
+      });
+    } catch (err: any) {
+      if (err.code === "P2002") {
+        throw new Error("A shop with a conflicting slug already exists, please try again");
+      }
+      throw err;
+    }
 
     if (oldLogoKey || oldBannerKey) {
       const storage = StorageFactory.get();
@@ -162,15 +228,18 @@ export const shopService = {
 
     return updated;
   },
+
   async getShop(sellerId: string, userId: string, shopId: string) {
     await shopAccessService.assertShopAccess(sellerId, userId, shopId);
 
-    const shop = await db.shop.findFirst({
-      where: { id: shopId, sellerId },
-      include: {
-        _count: { select: { products: true } },
-      },
-    });
+    const shop = await withTenantScope((tx) =>
+      tx.shop.findFirst({
+        where: { id: shopId, sellerId },
+        include: {
+          _count: { select: { products: true } },
+        },
+      })
+    );
     if (!shop) throw new Error("Shop not found");
     return resolveShopMediaUrls(shop);
   },
@@ -186,7 +255,7 @@ export const shopService = {
     },
   ) {
     const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
+    const limit = Math.min(filters.limit ?? 20, 100);
 
     const accessibleShopIds = await shopAccessService.getAccessibleShopIds(sellerId, userId);
     const where: any = { sellerId };
@@ -206,8 +275,8 @@ export const shopService = {
     if (filters.search)
       where.name = { contains: filters.search, mode: "insensitive" };
 
-    const [data, total] = await Promise.all([
-      db.shop.findMany({
+    const { data, total } = await withTenantScope(async (tx) => {
+      const data = await tx.shop.findMany({
         where,
         select: {
           id: true,
@@ -229,9 +298,10 @@ export const shopService = {
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * limit,
         take: limit,
-      }),
-      db.shop.count({ where }),
-    ]);
+      });
+      const total = await tx.shop.count({ where });
+      return { data, total };
+    });
 
     const STATUS_MAP: Record<string, string> = {
       PENDING: "pending",
@@ -260,7 +330,7 @@ export const shopService = {
     limit?: number;
   }) {
     const page = filters.page ?? 1;
-    const limit = filters.limit ?? 20;
+    const limit = Math.min(filters.limit ?? 20, 100);
 
     const where: any = {};
     if (filters.status) {
@@ -280,8 +350,8 @@ export const shopService = {
       ];
     }
 
-    const [data, total] = await Promise.all([
-      db.shop.findMany({
+    const { data, total } = await withTenantScope(async (tx) => {
+      const data = await tx.shop.findMany({
         where,
         select: {
           id: true,
@@ -306,9 +376,10 @@ export const shopService = {
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * limit,
         take: limit,
-      }),
-      db.shop.count({ where }),
-    ]);
+      });
+      const total = await tx.shop.count({ where });
+      return { data, total };
+    });
 
     const STATUS_MAP: Record<string, string> = {
       PENDING: "pending",
@@ -331,90 +402,13 @@ export const shopService = {
   },
 
   async setAutoAssign(sellerId: string, shopId: string, enabled: boolean) {
-    const shop = await db.shop.findFirst({ where: { id: shopId, sellerId } });
-    if (!shop) throw new Error("Shop not found");
-    return db.shop.update({ where: { id: shopId }, data: { autoAssignEnabled: enabled } });
+    return withTenantScope(async (tx) => {
+      const updateResult = await tx.shop.updateMany({
+        where: { id: shopId, sellerId },
+        data: { autoAssignEnabled: enabled },
+      });
+      if (updateResult.count === 0) throw new Error("Shop not found");
+      return tx.shop.findUniqueOrThrow({ where: { id: shopId } });
+    });
   },
-
-  // async approveShop(shopId: string, actorId: string, note?: string) {
-  //     const shop = await db.shop.findUnique({ where: { id: shopId } });
-  //     if (!shop) throw new Error("Shop not found");
-  //     if (shop.status !== "PENDING") throw new Error("Shop is not pending");
-
-  //     return db.$transaction(async (tx) => {
-  //         const updated = await tx.shop.update({
-  //             where: { id: shopId },
-  //             data: {
-  //                 status: "APPROVED",
-  //                 reviewedBy: actorId,
-  //                 reviewNote: note ?? null,
-  //                 reviewedAt: new Date(),
-  //             },
-  //         });
-
-  //         await tx.auditLog.create({
-  //             data: {
-  //                 sellerId: shop.sellerId,
-  //                 actorId,
-  //                 actorType: "platform",
-  //                 action: "SHOP_APPROVED",
-  //                 entityType: "shop",
-  //                 entityId: shopId,
-  //                 metadata: { note },
-  //             },
-  //         });
-
-  //         return updated;
-  //     });
-  // },
-
-  // async rejectShop(shopId: string, actorId: string, reason: string) {
-  //     const shop = await db.shop.findUnique({ where: { id: shopId } });
-  //     if (!shop) throw new Error("Shop not found");
-  //     if (shop.status !== "PENDING") throw new Error("Shop is not pending");
-
-  //     return db.$transaction(async (tx) => {
-  //         const updated = await tx.shop.update({
-  //             where: { id: shopId },
-  //             data: {
-  //                 status: "REJECTED",
-  //                 reviewedBy: actorId,
-  //                 reviewNote: reason,
-  //                 reviewedAt: new Date(),
-  //             },
-  //         });
-
-  //         await tx.auditLog.create({
-  //             data: {
-  //                 sellerId: shop.sellerId,
-  //                 actorId,
-  //                 actorType: "platform",
-  //                 action: "SHOP_REJECTED",
-  //                 entityType: "shop",
-  //                 entityId: shopId,
-  //                 metadata: { reason },
-  //             },
-  //         });
-
-  //         return updated;
-  //     });
-  // },
-
-  // async listPendingShops() {
-  //     return db.shop.findMany({
-  //         where: { status: "PENDING" },
-  //         select: {
-  //             id: true,
-  //             name: true,
-  //             slug: true,
-  //             category: true,
-  //             status: true,
-  //             createdAt: true,
-  //             seller: {
-  //                 select: { id: true, name: true, businessName: true },
-  //             },
-  //         },
-  //         orderBy: { createdAt: "asc" },
-  //     });
-  // },
 };

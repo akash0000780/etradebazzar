@@ -17,7 +17,7 @@ const clientErrors = [
 ];
 
 function isClientError(msg: string): boolean {
-    return clientErrors.includes(msg);
+    return clientErrors.includes(msg) || msg.startsWith("Invalid file type") || msg.startsWith("File too large");
 }
 
 export const reviewController = {
@@ -105,8 +105,12 @@ export const reviewController = {
 
     async listPendingReviews(req: Request, res: Response) {
         try {
-            const result = await reviewService.listPendingReviews();
-            return res.json({ success: true, data: result });
+            const { page, limit } = req.query as Record<string, string>;
+            const result = await reviewService.listPendingReviews(
+                page ? Number(page) : undefined,
+                limit ? Number(limit) : undefined,
+            );
+            return res.json({ success: true, data: result.data, meta: result.meta });
         } catch (error: any) {
             logger.error({ err: error.message }, "List pending reviews failed");
             return res.status(500).json({ success: false, error: "Internal server error" });
@@ -116,9 +120,14 @@ export const reviewController = {
     async getSellerReviews(req: Request, res: Response) {
         try {
             const sellerId = req.seller!.id;
-            const { status } = req.query as Record<string, string>;
-            const result = await reviewService.getSellerReviews(sellerId, status);
-            return res.json({ success: true, data: result });
+            const { status, page, limit } = req.query as Record<string, string>;
+            const result = await reviewService.getSellerReviews(
+                sellerId,
+                status,
+                page ? Number(page) : undefined,
+                limit ? Number(limit) : undefined,
+            );
+            return res.json({ success: true, data: result.data, meta: result.meta });
         } catch (error: any) {
             logger.error({ err: error.message }, "Get seller reviews failed");
             return res.status(500).json({ success: false, error: "Internal server error" });

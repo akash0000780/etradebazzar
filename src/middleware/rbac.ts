@@ -3,6 +3,10 @@ import { db } from "../db/index";
 import { redis, RedisKeys } from "../db/redis";
 import { logger } from "../utils/logger";
 
+export async function invalidateRoleCache(userId: string, scope: string) {
+  await redis.del(RedisKeys.userRoles(userId, scope));
+}
+
 export const requirePlatformRole = (...roles: string[]) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
@@ -29,6 +33,10 @@ export const requirePlatformRole = (...roles: string[]) => {
       }
 
       if (!platformRole || !roles.includes(platformRole)) {
+        logger.warn(
+          { actorId: req.user.id, requiredRoles: roles, path: req.originalUrl },
+          "Platform RBAC denied"
+        );
         return res.status(403).json({ error: "Insufficient platform permissions" });
       }
 
@@ -66,6 +74,10 @@ export const requireSellerRole = (...roles: string[]) => {
       }
 
       if (!sellerRole || !roles.includes(sellerRole)) {
+        logger.warn(
+          { actorId: req.user.id, sellerId: req.seller.id, requiredRoles: roles, path: req.originalUrl },
+          "Seller RBAC denied"
+        );
         return res.status(403).json({ error: "Insufficient seller permissions" });
       }
 

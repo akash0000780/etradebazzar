@@ -2,8 +2,14 @@ import { db } from "./index";
 import { logger } from "../utils/logger";
 import bcrypt from "bcryptjs";
 import { seedPlatformPermissions } from "../lib/permission/permission.service";
+import crypto from "crypto";
 
 async function seed() {
+  if (process.env.NODE_ENV === "production") {
+    logger.error("Refusing to run seed.ts with NODE_ENV=production");
+    process.exit(1);
+  }
+
   logger.info("Running seed...");
 
   const existing = await db.platformMember.findFirst({
@@ -16,7 +22,8 @@ async function seed() {
     process.exit(0);
   }
 
-  const password = await bcrypt.hash("Admin@123456", 12);
+  const generatedPassword = crypto.randomBytes(12).toString("base64url");
+  const password = await bcrypt.hash(generatedPassword, 12);
 
   await db.$transaction(async (tx) => {
     await seedPlatformPermissions(tx);
@@ -56,11 +63,12 @@ async function seed() {
     await tx.platformMember.create({
       data: { userId: user.id, roleId: role.id },
     });
-
-    logger.info(
-      "super_admin created  email: admin@etradebazaar.com, password: Admin@123456",
-    );
   });
+
+  console.log("super_admin created");
+  console.log("  email:    admin@etradebazaar.com");
+  console.log(`  password: ${generatedPassword}`);
+  console.log("Store this securely and rotate it after first login.");
 
   process.exit(0);
 }

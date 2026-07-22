@@ -4,30 +4,11 @@ import { logger } from "../../utils/logger";
 import { toCsv } from "../../utils/csv";
 
 export const shipmentController = {
-    async createShipment(req: Request, res: Response) {
-        try {
-            const { orderId, shopId, orderAddressId } = req.body;
-            const result = await shipmentService.createShipment(orderId, shopId, orderAddressId);
-            return res.status(201).json({ success: true, data: result });
-        } catch (error: any) {
-            logger.error({ err: error.message }, "Create shipment failed");
-            const clientErrors = [
-                "Order not found",
-                "Order not confirmed",
-                "Shop not found",
-                "Delivery address not found",
-            ];
-            if (clientErrors.includes(error.message)) {
-                return res.status(400).json({ success: false, error: error.message });
-            }
-            return res.status(500).json({ success: false, error: "Internal server error" });
-        }
-    },
-
     async trackShipment(req: Request, res: Response) {
         try {
+            const sellerId = req.seller!.id;
             const { shipmentId } = req.params;
-            const result = await shipmentService.trackShipment(String(shipmentId));
+            const result = await shipmentService.trackShipment(sellerId,String(shipmentId));
             return res.json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Track shipment failed");
@@ -41,9 +22,10 @@ export const shipmentController = {
 
     async cancelShipment(req: Request, res: Response) {
         try {
+            const sellerId = req.seller!.id;
             const { shipmentId } = req.params;
             const actorId = req.user!.id;
-            const result = await shipmentService.cancelShipment(String(shipmentId), actorId);
+            const result = await shipmentService.cancelShipment(sellerId, String(shipmentId), actorId);
             return res.json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Cancel shipment failed");
@@ -92,8 +74,9 @@ export const shipmentController = {
 
     async getShipment(req: Request, res: Response) {
         try {
+            const sellerId = req.seller!.id;
             const { shipmentId } = req.params;
-            const result = await shipmentService.getShipment(String(shipmentId));
+            const result = await shipmentService.getShipment(sellerId, String(shipmentId));
             return res.json({ success: true, data: result });
         } catch (error: any) {
             logger.error({ err: error.message }, "Get shipment failed");

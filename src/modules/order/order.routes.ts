@@ -2,8 +2,8 @@ import { Router } from "express";
 import multer from "multer";
 import { orderController } from "./order.controller";
 import { protect } from "../../middleware/auth";
-import { resolveTenant, setPlatformAdmin } from "../../middleware/tenant";
-import { requirePlatformRole, requireSellerRole } from "../../middleware/rbac";
+import { resolveTenant, requirePlatformAdmin } from "../../middleware/tenant";
+import { requireSellerRole } from "../../middleware/rbac";
 import { validate } from "../../utils/validate";
 import {
   sellerLimiter,
@@ -20,10 +20,15 @@ import {
   setCommissionSchema,
   bulkOrderActionSchema,
   bulkRespondNegotiationsSchema,
+  listAllOrdersSchema,
+  markPackedSchema,
 } from "./order.schema";
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 // Static routes (must be before /:orderId to avoid shadowing)
 router.get(
@@ -57,8 +62,8 @@ router.get(
   "/all",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin"),
+  requirePlatformAdmin("super_admin"),
+  validate(listAllOrdersSchema),
   orderController.listAllOrders,
 );
 
@@ -95,9 +100,8 @@ router.post(
 router.post(
   "/commission",
   protect,
-  setPlatformAdmin,
   sellerLimiter,
-  requirePlatformRole("super_admin"),
+  requirePlatformAdmin("super_admin"),
   validate(setCommissionSchema),
   orderController.setCommission,
 );
@@ -122,14 +126,16 @@ router.post(
 router.post(
   "/:orderId/negotiate",
   protect,
+  resolveTenant,
   validate(submitProposalSchema),
   publicLimiter,
-  orderController.submitProposal,
+  orderController.submitProposalAsCustomer,
 );
 
 router.patch(
   "/:orderId/negotiate/:negotiationId",
   protect,
+  resolveTenant,
   publicLimiter,
   validate(respondProposalSchema),
   orderController.respondToProposal,
@@ -138,9 +144,20 @@ router.patch(
 router.get(
   "/:orderId",
   protect,
+  resolveTenant,
   publicLimiter,
   validate(orderParamSchema),
   orderController.getOrder,
+);
+
+router.patch(
+  "/:orderId/pack",
+  protect,
+  resolveTenant,
+  sellerLimiter,
+  requireSellerRole("owner", "manager", "staff"),
+  validate(markPackedSchema),
+  orderController.markPacked,
 );
 
 // Seller
@@ -160,7 +177,7 @@ router.post(
   resolveTenant,
   requireSellerRole("owner", "manager"),
   validate(submitProposalSchema),
-  orderController.submitProposal,
+  orderController.submitProposalAsSeller,
 );
 
 router.patch(

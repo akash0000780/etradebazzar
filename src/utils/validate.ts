@@ -10,7 +10,6 @@ export const validate = (schema: z.ZodObject<any>) => {
         body: req.body,
         query: req.query,
         params: req.params,
-        headers: req.headers,
       });
 
       if (!parsed.success) {
@@ -32,7 +31,7 @@ export const validate = (schema: z.ZodObject<any>) => {
           details: Object.entries(formatted)
             .filter(([key]) => key !== "_errors")
             .flatMap(([key, value]: [string, any]) =>
-              value._errors.map((msg: string) => ({
+              (value._errors ?? []).map((msg: string) => ({
                 field: key,
                 message: msg,
               }))
@@ -40,9 +39,18 @@ export const validate = (schema: z.ZodObject<any>) => {
         });
       }
 
-      req.body = parsed.data.body || req.body;
-      req.query = parsed.data.query || (req.query as any);
-      req.params = parsed.data.params || (req.params as any);
+      if (parsed.data.body !== undefined) {
+        req.body = parsed.data.body;
+      }
+
+      if (parsed.data.query !== undefined) {
+        Object.keys(req.query).forEach((key) => delete (req.query as any)[key]);
+        Object.assign(req.query, parsed.data.query);
+      }
+
+      if (parsed.data.params !== undefined) {
+        Object.assign(req.params, parsed.data.params);
+      }
 
       next();
     } catch (error) {

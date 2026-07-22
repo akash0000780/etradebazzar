@@ -12,7 +12,6 @@ export const productSearchController = {
                 maxPrice,
                 sellerId,
                 shopId,
-                status,
                 page,
                 limit,
             } = req.query as Record<string, string>;
@@ -24,7 +23,6 @@ export const productSearchController = {
                 maxPrice: maxPrice ? Number(maxPrice) : undefined,
                 sellerId,
                 shopId,
-                status,
                 page: page ? Number(page) : undefined,
                 limit: limit ? Number(limit) : undefined,
             });

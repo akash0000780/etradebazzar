@@ -1,14 +1,31 @@
 import { db } from "../../db/index";
+import { redis } from "../../db/redis";
 import { decrypt, encrypt } from "../../utils/encryption";
 import { PayoutFactory } from "../../lib/payouts/payout.factory";
 import { notificationService } from "../notification/notification.service";
 import { logger } from "../../utils/logger";
 import { triggerAnalyticsRefresh } from "../../lib/analytics/analytics.events";
+import { getPlatformConfig } from "../../lib/platform-config/platform-config";
+import { maskAccountNumber } from "../../utils/mask";
 
-async function getPlatformConfig(key: string): Promise<string> {
-    const config = await db.platformConfig.findUnique({ where: { key } });
-    if (!config) throw new Error(`Platform config not found: ${key}`);
-    return decrypt(config.value);
+const PAYOUT_LOCK_TTL = 30;
+
+async function acquirePayoutLock(sellerId: string): Promise<boolean> {
+    const result = await redis.set(`payout:lock:${sellerId}`, "1", "EX", PAYOUT_LOCK_TTL, "NX");
+    return result === "OK";
+}
+
+async function releasePayoutLock(sellerId: string): Promise<void> {
+    await redis.del(`payout:lock:${sellerId}`);
+}
+
+async function getPayoutProvider() {
+    const [keyId, keySecret, sourceAccountNumber] = await Promise.all([
+        getPlatformConfig("razorpay_key_id"),
+        getPlatformConfig("razorpay_key_secret"),
+        getPlatformConfig("razorpay_account_number"),
+    ]);
+    return PayoutFactory.get(keyId, keySecret, sourceAccountNumber);
 }
 
 async function getSellerOwner(sellerId: string) {
@@ -90,7 +107,7 @@ export const payoutService = {
                 bankDetail: seller.bankDetail
                     ? {
                         ...seller.bankDetail,
-                        accountNumber: decrypt(seller.bankDetail.accountNumber),
+                        accountNumber: maskAccountNumber(decrypt(seller.bankDetail.accountNumber)),
                     }
                     : null,
             },
@@ -107,39 +124,48 @@ export const payoutService = {
             select: { id: true, name: true, businessName: true, email: true },
         });
 
-        const summaries = await Promise.all(
-            sellers.map(async (seller) => {
-                const unpaidOrders = await db.order.count({
-                    where: {
-                        sellerId: seller.id,
-                        status: "DELIVERED",
-                        paymentStatus: "PAID",
-                        payoutOrders: { none: {} },
-                    },
-                });
+        const sellerIds = sellers.map((s) => s.id);
 
-                const agg = await db.order.aggregate({
-                    where: {
-                        sellerId: seller.id,
-                        status: "DELIVERED",
-                        paymentStatus: "PAID",
-                        payoutOrders: { none: {} },
-                    },
-                    _sum: { finalAmount: true, totalAmount: true, commissionAmount: true },
-                });
+        const [counts, aggregates] = await Promise.all([
+            db.order.groupBy({
+                by: ["sellerId"],
+                where: {
+                    sellerId: { in: sellerIds },
+                    status: "DELIVERED",
+                    paymentStatus: "PAID",
+                    payoutOrders: { none: {} },
+                },
+                _count: { id: true },
+            }),
+            db.order.groupBy({
+                by: ["sellerId"],
+                where: {
+                    sellerId: { in: sellerIds },
+                    status: "DELIVERED",
+                    paymentStatus: "PAID",
+                    payoutOrders: { none: {} },
+                },
+                _sum: { finalAmount: true, totalAmount: true, commissionAmount: true },
+            }),
+        ]);
 
-                const gross = Number(agg._sum.finalAmount ?? agg._sum.totalAmount ?? 0);
-                const commission = Number(agg._sum.commissionAmount ?? 0);
+        const countMap = new Map(counts.map((c) => [c.sellerId, c._count.id]));
+        const aggMap = new Map(aggregates.map((a) => [a.sellerId, a._sum]));
 
-                return {
-                    ...seller,
-                    unpaidOrderCount: unpaidOrders,
-                    grossAmount: gross,
-                    commissionAmount: commission,
-                    netAmount: gross - commission,
-                };
-            })
-        );
+        const summaries = sellers.map((seller) => {
+            const unpaidOrderCount = countMap.get(seller.id) ?? 0;
+            const sums = aggMap.get(seller.id);
+            const gross = Number(sums?.finalAmount ?? sums?.totalAmount ?? 0);
+            const commission = Number(sums?.commissionAmount ?? 0);
+
+            return {
+                ...seller,
+                unpaidOrderCount,
+                grossAmount: gross,
+                commissionAmount: commission,
+                netAmount: gross - commission,
+            };
+        });
 
         return summaries.filter((s) => s.unpaidOrderCount > 0);
     },
@@ -154,163 +180,173 @@ export const payoutService = {
             periodEnd?: string;
         }
     ) {
-        const seller = await db.seller.findUnique({
-            where: { id: sellerId },
-            include: { bankDetail: true },
-        });
-        if (!seller) throw new Error("Seller not found");
-        if (!seller.bankDetail) throw new Error("Seller bank details not found");
-
-        const unpaidOrders = await db.order.findMany({
-            where: {
-                sellerId,
-                status: "DELIVERED",
-                paymentStatus: "PAID",
-                payoutOrders: { none: {} },
-                ...(data.periodStart && data.periodEnd && {
-                    createdAt: {
-                        gte: new Date(data.periodStart),
-                        lte: new Date(data.periodEnd),
-                    },
-                }),
-            },
-            select: {
-                id: true,
-                totalAmount: true,
-                finalAmount: true,
-                commissionAmount: true,
-            },
-        });
-
-        if (!unpaidOrders.length) throw new Error("No unpaid orders to payout");
-
-        const grossAmount = unpaidOrders.reduce(
-            (sum, o) => sum + Number(o.finalAmount ?? o.totalAmount),
-            0
-        );
-        const commissionAmount = unpaidOrders.reduce(
-            (sum, o) => sum + Number(o.commissionAmount ?? 0),
-            0
-        );
-        const netAmount = grossAmount - commissionAmount;
-
-        if (netAmount <= 0) throw new Error("Net payout amount must be greater than 0");
-
-        const accountNumber = decrypt(seller.bankDetail.accountNumber);
-
-        const [keyId, keySecret] = await Promise.all([
-            getPlatformConfig("razorpay_key_id"),
-            getPlatformConfig("razorpay_key_secret"),
-        ]);
-        const provider = PayoutFactory.get(keyId, keySecret);
-
-        const fundAccount = await provider.createFundAccount({
-            accountHolderName: seller.bankDetail.accountHolderName,
-            accountNumber,
-            ifscCode: seller.bankDetail.ifscCode,
-            bankName: seller.bankDetail.bankName,
-            contactName: seller.name,
-            contactEmail: seller.email,
-            contactPhone: seller.phone,
-        });
-
-        const payout = await db.$transaction(async (tx) => {
-            const created = await tx.sellerPayout.create({
-                data: {
-                    sellerId,
-                    grossAmount,
-                    commissionAmount,
-                    netAmount,
-                    method: data.method,
-                    fundAccountId: fundAccount.fundAccountId,
-                    status: "PENDING",
-                    initiatedBy: actorId,
-                    note: data.note,
-                    periodStart: data.periodStart ? new Date(data.periodStart) : null,
-                    periodEnd: data.periodEnd ? new Date(data.periodEnd) : null,
-                    orders: {
-                        create: unpaidOrders.map((o) => ({
-                            orderId: o.id,
-                            orderAmount: Number(o.finalAmount ?? o.totalAmount),
-                            commissionAmount: Number(o.commissionAmount ?? 0),
-                            netAmount:
-                                Number(o.finalAmount ?? o.totalAmount) - Number(o.commissionAmount ?? 0),
-                        })),
-                    },
-                },
-            });
-
-            await tx.auditLog.create({
-                data: {
-                    sellerId,
-                    actorId,
-                    actorType: "platform",
-                    action: "PAYOUT_INITIATED",
-                    entityType: "seller_payout",
-                    entityId: created.id,
-                    metadata: { grossAmount, commissionAmount, netAmount, method: data.method },
-                },
-            });
-
-            return created;
-        });
+        const locked = await acquirePayoutLock(sellerId);
+        if (!locked) throw new Error("Payout already in progress for this seller, please wait");
 
         try {
-            const result = await provider.createPayout({
-                fundAccountId: fundAccount.fundAccountId,
-                amount: netAmount,
-                currency: "INR",
-                mode: data.method,
-                refId: payout.id,
-                narration: `Payout for ${seller.businessName}`,
+            const seller = await db.seller.findUnique({
+                where: { id: sellerId },
+                include: { bankDetail: true },
             });
+            if (!seller) throw new Error("Seller not found");
+            if (!seller.bankDetail) throw new Error("Seller bank details not found");
+            if (seller.bankDetail.verificationStatus !== "VERIFIED") {
+                throw new Error(
+                    `Seller bank account is not verified (status: ${seller.bankDetail.verificationStatus}) - cannot initiate payout`
+                );
+            }
 
-            await db.sellerPayout.update({
-                where: { id: payout.id },
-                data: {
-                    razorpayPayoutId: result.razorpayPayoutId,
-                    status: result.status === "processed" ? "PAID"
-                        : result.status === "failed" ? "FAILED"
-                            : result.status === "queued" ? "QUEUED"
-                                : "PROCESSING",
-                    utrReference: result.utrRef,
-                    paidAt: result.status === "processed" ? new Date() : null,
+            const unpaidOrders = await db.order.findMany({
+                where: {
+                    sellerId,
+                    status: "DELIVERED",
+                    paymentStatus: "PAID",
+                    payoutOrders: { none: {} },
+                    ...(data.periodStart && data.periodEnd && {
+                        createdAt: {
+                            gte: new Date(data.periodStart),
+                            lte: new Date(data.periodEnd),
+                        },
+                    }),
+                },
+                select: {
+                    id: true,
+                    totalAmount: true,
+                    finalAmount: true,
+                    commissionAmount: true,
                 },
             });
-        } catch (err: any) {
-            await db.sellerPayout.update({
-                where: { id: payout.id },
-                data: { status: "FAILED", failureReason: err.message },
+
+            if (!unpaidOrders.length) throw new Error("No unpaid orders to payout");
+
+            const grossAmount = unpaidOrders.reduce(
+                (sum, o) => sum + Number(o.finalAmount ?? o.totalAmount),
+                0
+            );
+            const commissionAmount = unpaidOrders.reduce(
+                (sum, o) => sum + Number(o.commissionAmount ?? 0),
+                0
+            );
+            const netAmount = grossAmount - commissionAmount;
+
+            if (netAmount <= 0) throw new Error("Net payout amount must be greater than 0");
+
+            const provider = await getPayoutProvider();
+
+            let fundAccountId = seller.bankDetail.fundAccountId;
+            if (!fundAccountId) {
+                const accountNumber = decrypt(seller.bankDetail.accountNumber);
+                const fundAccount = await provider.createFundAccount({
+                    accountHolderName: seller.bankDetail.accountHolderName,
+                    accountNumber,
+                    ifscCode: seller.bankDetail.ifscCode,
+                    bankName: seller.bankDetail.bankName,
+                    contactName: seller.name,
+                    contactEmail: seller.email,
+                    contactPhone: seller.phone,
+                });
+                fundAccountId = fundAccount.fundAccountId;
+            }
+
+            const payout = await db.$transaction(async (tx) => {
+                const created = await tx.sellerPayout.create({
+                    data: {
+                        sellerId,
+                        grossAmount,
+                        commissionAmount,
+                        netAmount,
+                        method: data.method,
+                        fundAccountId,
+                        status: "PENDING",
+                        initiatedBy: actorId,
+                        note: data.note,
+                        periodStart: data.periodStart ? new Date(data.periodStart) : null,
+                        periodEnd: data.periodEnd ? new Date(data.periodEnd) : null,
+                        orders: {
+                            create: unpaidOrders.map((o) => ({
+                                orderId: o.id,
+                                orderAmount: Number(o.finalAmount ?? o.totalAmount),
+                                commissionAmount: Number(o.commissionAmount ?? 0),
+                                netAmount:
+                                    Number(o.finalAmount ?? o.totalAmount) - Number(o.commissionAmount ?? 0),
+                            })),
+                        },
+                    },
+                });
+
+                await tx.auditLog.create({
+                    data: {
+                        sellerId,
+                        actorId,
+                        actorType: "platform",
+                        action: "PAYOUT_INITIATED",
+                        entityType: "seller_payout",
+                        entityId: created.id,
+                        metadata: { grossAmount, commissionAmount, netAmount, method: data.method },
+                    },
+                });
+
+                return created;
             });
-            logger.error({ err: err.message, payoutId: payout.id }, "Payout initiation failed");
-        }
 
-        const owner = await getSellerOwner(sellerId);
-        if (owner) {
-            notificationService.notify({
-                userId: owner.userId,
-                email: owner.user.email,
-                type: "PAYOUT_INITIATED",
-                title: "Payout initiated",
-                message: `A payout of ₹${netAmount.toFixed(2)} has been initiated for ${seller.businessName}.`,
-                channels: ["email", "sse"],
-                data: { payoutId: payout.id, netAmount },
-            }).catch(() => null);
-        }
+            try {
+                const result = await provider.createPayout({
+                    fundAccountId,
+                    amount: netAmount,
+                    currency: "INR",
+                    mode: data.method,
+                    refId: payout.id,
+                    narration: `Payout for ${seller.businessName}`,
+                });
 
-        return db.sellerPayout.findUnique({
-            where: { id: payout.id },
-            include: { orders: true },
-        });
+                await db.sellerPayout.update({
+                    where: { id: payout.id },
+                    data: {
+                        razorpayPayoutId: result.razorpayPayoutId,
+                        status: result.status === "processed" ? "PAID"
+                            : result.status === "failed" ? "FAILED"
+                                : result.status === "queued" ? "QUEUED"
+                                    : "PROCESSING",
+                        utrReference: result.utrRef,
+                        paidAt: result.status === "processed" ? new Date() : null,
+                    },
+                });
+            } catch (err: any) {
+                await db.sellerPayout.update({
+                    where: { id: payout.id },
+                    data: { status: "FAILED", failureReason: err.message },
+                });
+                logger.error({ err: err.message, payoutId: payout.id },
+                    "Payout initiation failed orders remain claimed under this payout for manual investigation/retry",
+                );}
+
+            const owner = await getSellerOwner(sellerId);
+            if (owner) {
+                notificationService.notify({
+                    userId: owner.userId,
+                    email: owner.user.email,
+                    type: "PAYOUT_INITIATED",
+                    title: "Payout initiated",
+                    message: `A payout of ₹${netAmount.toFixed(2)} has been initiated for ${seller.businessName}.`,
+                    channels: ["email", "sse"],
+                    data: { payoutId: payout.id, netAmount },
+                }).catch(() => null);
+            }
+
+            return db.sellerPayout.findUnique({
+                where: { id: payout.id },
+                include: { orders: true },
+            });
+        } finally {
+            await releasePayoutLock(sellerId);
+        }
     },
 
-    async handleWebhook(payload: any, signature: string) {
-        const [keyId, keySecret, webhookSecret] = await Promise.all([
-            getPlatformConfig("razorpay_key_id"),
-            getPlatformConfig("razorpay_key_secret"),
+    async handleWebhook(payload: Buffer | string, signature: string) {
+        const [provider, webhookSecret] = await Promise.all([
+            getPayoutProvider(),
             getPlatformConfig("razorpay_payout_webhook_secret"),
         ]);
-        const provider = PayoutFactory.get(keyId, keySecret);
         const result = await provider.handleWebhook(payload, signature, webhookSecret);
 
         logger.info({ razorpayPayoutId: result.razorpayPayoutId, status: result.status }, "Payout webhook received");
@@ -329,6 +365,11 @@ export const payoutService = {
         };
 
         const newStatus = statusMap[result.status] ?? "PROCESSING";
+
+
+        if (payout.status === newStatus) {
+            return { received: true };
+        }
 
         await db.sellerPayout.update({
             where: { id: payout.id },
@@ -370,7 +411,7 @@ export const payoutService = {
         filters?: { status?: string; search?: string; dateFrom?: string; dateTo?: string; page?: number; limit?: number }
     ) {
         const page = filters?.page ?? 1;
-        const limit = filters?.limit ?? 20;
+        const limit = Math.min(filters?.limit ?? 20, 100);
 
         const where: any = sellerId ? { sellerId } : {};
         if (filters?.status) where.status = filters.status;

@@ -1,41 +1,37 @@
 import helmet from "helmet";
 import cors from "cors";
-import rateLimit from "express-rate-limit";
 
 import { config } from "../../config/config";
+import { logger } from "../utils/logger";
 
 const allowedOrigins = config.allowedOrigins;
+const isWildcard = allowedOrigins.length === 1 && allowedOrigins[0] === "*";
+
+if (isWildcard) {
+  logger.warn(
+    "CORS is configured with a wildcard origin credentials will be disabled for cross-origin requests"
+  );
+}
 
 const corsMiddleware = cors({
   origin: (origin, callback) => {
-    if (
-      !origin ||
-      allowedOrigins.includes(origin) ||
-      allowedOrigins[0] === "*"
-    ) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
+    if (!origin) {
+      return callback(null, true);
     }
+    if (isWildcard || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("Not allowed by CORS"));
   },
-  credentials: true,
+  credentials: !isWildcard,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-});
-
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 150,
-  standardHeaders: "draft-7",
-  legacyHeaders: false,
-  skip: (req) => req.ip === "::1" || req.ip === "127.0.0.1",
-  message: { error: "Too many requests  please try again later" },
-  keyGenerator: (req) => req.ip || "unknown",
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Request-Id"],
+  exposedHeaders: ["X-Request-Id"],
 });
 
 const helmetMiddleware = helmet({
   contentSecurityPolicy:
-    process.env.NODE_ENV === "production" ? undefined : false,
+    config.nodeEnv === "production" ? undefined : false,
   crossOriginEmbedderPolicy: false,
   crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
   crossOriginResourcePolicy: { policy: "same-origin" },
@@ -45,4 +41,5 @@ const helmetMiddleware = helmet({
   hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
   xContentTypeOptions: true,
 });
-export const security = [helmetMiddleware, corsMiddleware, limiter];
+
+export const security = [helmetMiddleware, corsMiddleware];

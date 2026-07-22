@@ -1,6 +1,7 @@
 import { db } from "../db/index";
 
 const EARTH_RADIUS_KM = 6371;
+const MAX_CANDIDATE_SHOPS = 200;
 
 export function haversineDistance(
   lat1: number, lon1: number,
@@ -15,13 +16,17 @@ export function haversineDistance(
     Math.sin(dLon / 2) ** 2;
   return EARTH_RADIUS_KM * 2 * Math.asin(Math.sqrt(a));
 }
+export interface NearestShopResult {
+  shopId: string;
+  distanceBased: boolean;
+}
 
 export async function findNearestShop(
   sellerId: string,
   productIds: string[],
   lat?: number,
   lon?: number
-): Promise<string | null> {
+): Promise<NearestShopResult | null> {
   const shops = await db.shop.findMany({
     where: {
       sellerId,
@@ -35,16 +40,21 @@ export async function findNearestShop(
       },
     },
     select: { id: true, latitude: true, longitude: true },
+    take: MAX_CANDIDATE_SHOPS,
   });
 
   if (!shops.length) return null;
-  if (!lat || !lon) return shops[0]!.id;
+  if (!lat || !lon) {
+    return { shopId: shops[0]!.id, distanceBased: false };
+  }
 
   let nearestId = shops[0]!.id;
   let minDistance = Infinity;
+  let foundWithCoords = false;
 
   for (const shop of shops) {
     if (!shop.latitude || !shop.longitude) continue;
+    foundWithCoords = true;
     const distance = haversineDistance(
       lat, lon,
       Number(shop.latitude),
@@ -56,5 +66,5 @@ export async function findNearestShop(
     }
   }
 
-  return nearestId;
+  return { shopId: nearestId, distanceBased: foundWithCoords };
 }

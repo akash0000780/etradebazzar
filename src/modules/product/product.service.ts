@@ -1,7 +1,46 @@
 import { db } from "../../db/index";
+import { logger } from "../../utils/logger";
 import { notificationService } from "../notification/notification.service";
 import { generateDisplayId } from "../../lib/uid/uid.generator";
+import { withTenantScope, withOptionalTenantScope } from "../../middleware/tenant";
 import { resolveImageUrls } from "./product-image.service";
+
+const SKU_UNIQUE_CONSTRAINT = "products_sku_key";
+
+function isUniqueConstraintError(err: any, constraintName: string): boolean {
+  return err?.code === "P2002" && err?.meta?.target?.includes?.(constraintName);
+}
+
+async function validateProductAttributes(
+  categoryId: string,
+  attributes: Record<string, string | number | boolean | null> | null | undefined,
+): Promise<void> {
+  const definitions = await db.categoryAttribute.findMany({
+    where: { categoryId, isVariant: false },
+  });
+  if (!definitions.length) return;
+
+  const values = attributes ?? {};
+  const knownKeys = new Set(definitions.map((d) => d.key));
+
+  for (const key of Object.keys(values)) {
+    if (!knownKeys.has(key)) {
+      throw new Error(`Unknown attribute "${key}" for this category`);
+    }
+  }
+
+  for (const def of definitions) {
+    const value = values[def.key];
+    const isEmpty = value === undefined || value === null || value === "";
+
+    if (def.required && isEmpty) {
+      throw new Error(`Missing required attribute "${def.label}"`);
+    }
+    if (!isEmpty && def.type === "ENUM" && !def.options.includes(String(value))) {
+      throw new Error(`Invalid value for attribute "${def.label}"`);
+    }
+  }
+}
 
 export const productService = {
   async createProduct(
@@ -22,23 +61,9 @@ export const productService = {
       width?: number;
       height?: number;
       isDigital: boolean;
+      attributes?: Record<string, string | number | boolean | null>;
     },
   ) {
-    if (data.shopId) {
-      const shop = await db.shop.findFirst({
-        where: { id: data.shopId, sellerId },
-      });
-      if (!shop) throw new Error("Shop not found");
-      if (shop.status !== "APPROVED") throw new Error("Shop not approved");
-    }
-
-    if (data.sku) {
-      const existing = await db.product.findUnique({
-        where: { sku: data.sku },
-      });
-      if (existing) throw new Error("SKU already exists");
-    }
-
     const kyc = await db.sellerKyc.findUnique({ where: { sellerId } });
     if (!kyc) throw new Error("KYC not submitted");
     if (kyc.status !== "VERIFIED") throw new Error("KYC not verified");
@@ -48,57 +73,62 @@ export const productService = {
     });
     if (!category) throw new Error("Category not found");
 
+    await validateProductAttributes(data.categoryId, data.attributes);
+
     const displayId = await generateDisplayId("product");
 
-    return db.$transaction(async (tx) => {
-      const product = await tx.product.create({
-        data: {
-          sellerId,
-          shopId: data.shopId ?? null,
-          categoryId: data.categoryId,
-          displayId,
-          name: data.name,
-          description: data.description,
-          price: data.price,
-          compareAtPrice: data.compareAtPrice,
-          sku: data.sku,
-          stock: data.stock,
-          lowStockThreshold: data.lowStockThreshold,
-          weightGrams: data.weightGrams,
-          length: data.length,
-          width: data.width,
-          height: data.height,
-          isDigital: data.isDigital,
-        },
-      });
+    try {
+      return await withTenantScope(async (tx) => {
+        if (data.shopId) {
+          const shop = await tx.shop.findFirst({
+            where: { id: data.shopId, sellerId },
+          });
+          if (!shop) throw new Error("Shop not found");
+          if (shop.status !== "APPROVED") throw new Error("Shop not approved");
+        }
 
-      if (data.sku) {
-        await tx.productSKU.create({
+        const product = await tx.product.create({
           data: {
-            productId: product.id,
+            sellerId,
+            shopId: data.shopId ?? null,
+            categoryId: data.categoryId,
+            displayId,
+            name: data.name,
+            description: data.description,
+            price: data.price,
+            compareAtPrice: data.compareAtPrice,
             sku: data.sku,
-            price: data.price ?? 0,
-            stock: data.stock ?? 0,
-            minQuantity: 1,
-            options: {},
+            stock: data.stock,
+            lowStockThreshold: data.lowStockThreshold,
+            weightGrams: data.weightGrams,
+            length: data.length,
+            width: data.width,
+            height: data.height,
+            isDigital: data.isDigital,
+            attributes: data.attributes ?? undefined,
           },
         });
-      }
 
-      await tx.auditLog.create({
-        data: {
-          sellerId,
-          actorId,
-          actorType: "seller",
-          action: "PRODUCT_CREATED",
-          entityType: "product",
-          entityId: product.id,
-          metadata: { name: data.name, shopId: data.shopId ?? null },
-        },
+        await tx.auditLog.create({
+          data: {
+            sellerId,
+            actorId,
+            actorType: "seller",
+            action: "PRODUCT_CREATED",
+            entityType: "product",
+            entityId: product.id,
+            metadata: { name: data.name, shopId: data.shopId ?? null },
+          },
+        });
+
+        return product;
       });
-
-      return product;
-    });
+    } catch (err: any) {
+      if (isUniqueConstraintError(err, SKU_UNIQUE_CONSTRAINT)) {
+        throw new Error("SKU already exists");
+      }
+      throw err;
+    }
   },
 
   async updateProduct(
@@ -118,22 +148,9 @@ export const productService = {
       width: number;
       height: number;
       isDigital: boolean;
+      attributes: Record<string, string | number | boolean | null>;
     }>,
   ) {
-    const product = await db.product.findFirst({
-      where: { id: productId, sellerId },
-    });
-    if (!product) throw new Error("Product not found");
-    if (product.status === "REJECTED")
-      throw new Error("Cannot update rejected product");
-
-    if (data.sku && data.sku !== product.sku) {
-      const existing = await db.product.findUnique({
-        where: { sku: data.sku },
-      });
-      if (existing) throw new Error("SKU already exists");
-    }
-
     if (data.categoryId) {
       const category = await db.category.findUnique({
         where: { id: data.categoryId },
@@ -141,74 +158,63 @@ export const productService = {
       if (!category) throw new Error("Category not found");
     }
 
-    return db.$transaction(async (tx) => {
-      const updated = await tx.product.update({
-        where: { id: productId },
-        data,
-      });
+    try {
+      return await withTenantScope(async (tx) => {
+        const product = await tx.product.findFirst({
+          where: { id: productId, sellerId },
+        });
+        if (!product) throw new Error("Product not found");
+        if (product.status === "REJECTED")
+          throw new Error("Cannot update rejected product");
 
-      if (data.sku) {
-        const existingSku = await tx.productSKU.findUnique({
-          where: { sku: product.sku || "" },
+        if (data.categoryId || data.attributes !== undefined) {
+          const effectiveCategoryId = data.categoryId ?? product.categoryId;
+          const effectiveAttributes =
+            data.attributes !== undefined
+              ? data.attributes
+              : (product.attributes as Record<string, string | number | boolean | null> | null);
+          await validateProductAttributes(effectiveCategoryId, effectiveAttributes);
+        }
+
+        const updated = await tx.product.update({
+          where: { id: productId },
+          data,
         });
 
-        if (existingSku && data.sku !== product.sku) {
-          await tx.productSKU.update({
-            where: { id: existingSku.id },
-            data: {
-              sku: data.sku,
-              ...(data.price !== undefined && { price: data.price }),
-              ...(data.stock !== undefined && { stock: data.stock }),
-            },
-          });
-        } else if (!existingSku && data.sku !== product.sku) {
-          await tx.productSKU.create({
-            data: {
-              productId,
-              sku: data.sku,
-              price: data.price ?? product.price ?? 0,
-              stock: data.stock ?? product.stock ?? 0,
-              minQuantity: 1,
-              options: {},
-            },
-          });
-        } else if (existingSku) {
-          await tx.productSKU.update({
-            where: { id: existingSku.id },
-            data: {
-              ...(data.price !== undefined && { price: data.price }),
-              ...(data.stock !== undefined && { stock: data.stock }),
-            },
-          });
-        }
-      }
+        await tx.auditLog.create({
+          data: {
+            sellerId,
+            actorId,
+            actorType: "seller",
+            action: "PRODUCT_UPDATED",
+            entityType: "product",
+            entityId: productId,
+            metadata: data as any,
+          },
+        });
 
-      await tx.auditLog.create({
-        data: {
-          sellerId,
-          actorId,
-          actorType: "seller",
-          action: "PRODUCT_UPDATED",
-          entityType: "product",
-          entityId: productId,
-          metadata: data as any,
-        },
+        return updated;
       });
-
-      return updated;
-    });
+    } catch (err: any) {
+      if (isUniqueConstraintError(err, SKU_UNIQUE_CONSTRAINT)) {
+        throw new Error("SKU already exists");
+      }
+      throw err;
+    }
   },
 
   async getProduct(sellerId: string, productId: string) {
-    const product = await db.product.findFirst({
-      where: { id: productId, sellerId },
-      include: {
-        images: { orderBy: { order: "asc" } },
-        skus: true,
-        shop: { select: { id: true, name: true, slug: true } },
-        category: { select: { id: true, name: true } },
-      },
-    });
+    const product = await withTenantScope((tx) =>
+      tx.product.findFirst({
+        where: { id: productId, sellerId },
+        include: {
+          images: { orderBy: { order: "asc" } },
+          skus: true,
+          shop: { select: { id: true, name: true, slug: true } },
+          category: { select: { id: true, name: true } },
+        },
+      })
+    );
     if (!product) throw new Error("Product not found");
 
     const seller = await db.seller.findUnique({
@@ -231,22 +237,24 @@ export const productService = {
   },
 
   async getProductById(productId: string) {
-    const product = await db.product.findUnique({
-      where: { id: productId },
-      include: {
-        images: { orderBy: { order: "asc" } },
-        skus: true,
-        shop: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            seller: { select: { id: true, name: true, businessName: true } },
+    const product = await withOptionalTenantScope((tx) =>
+      tx.product.findUnique({
+        where: { id: productId },
+        include: {
+          images: { orderBy: { order: "asc" } },
+          skus: true,
+          shop: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              seller: { select: { id: true, name: true, businessName: true } },
+            },
           },
+          category: { select: { id: true, name: true } },
         },
-        category: { select: { id: true, name: true } },
-      },
-    });
+      })
+    );
     if (!product) throw new Error("Product not found");
 
     const seller = await db.seller.findUnique({
@@ -296,8 +304,8 @@ export const productService = {
     if (filters.search)
       where.name = { contains: filters.search, mode: "insensitive" };
 
-    const [data, total] = await Promise.all([
-      db.product.findMany({
+    const { data, total } = await withTenantScope(async (tx) => {
+      const data = await tx.product.findMany({
         where,
         include: {
           images: { orderBy: { order: "asc" } },
@@ -308,11 +316,16 @@ export const productService = {
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * limit,
         take: limit,
-      }),
-      db.product.count({ where }),
-    ]);
+      });
+      const total = await tx.product.count({ where });
+      return { data, total };
+    });
 
-    const mapped = data.map((p) => ({
+    const withSignedImages = await Promise.all(
+      data.map(async (p) => ({ ...p, images: await resolveImageUrls(p.images) })),
+    );
+
+    const mapped = withSignedImages.map((p) => ({
       ...p,
       status: p.status.toLowerCase(),
       price: p.price ? Number(p.price) : null,
@@ -326,36 +339,37 @@ export const productService = {
   },
 
   async approveProduct(productId: string, actorId: string, note?: string) {
-    const product = await db.product.findUnique({ where: { id: productId } });
-    if (!product) throw new Error("Product not found");
-    if (product.status !== "PENDING") throw new Error("Product is not pending");
+    const { updated, product } = await withTenantScope(async (tx) => {
+      const product = await tx.product.findUnique({ where: { id: productId } });
+      if (!product) throw new Error("Product not found");
+      if (product.status !== "PENDING") throw new Error("Product is not pending");
 
-    const [updated, owner, seller] = await Promise.all([
-      db.$transaction(async (tx) => {
-        const result = await tx.product.update({
-          where: { id: productId },
-          data: {
-            status: "APPROVED",
-            reviewedBy: actorId,
-            reviewNote: note ?? null,
-            reviewedAt: new Date(),
-          },
-        });
+      const updated = await tx.product.update({
+        where: { id: productId },
+        data: {
+          status: "APPROVED",
+          reviewedBy: actorId,
+          reviewNote: note ?? null,
+          reviewedAt: new Date(),
+        },
+      });
 
-        await tx.auditLog.create({
-          data: {
-            sellerId: product.sellerId,
-            actorId,
-            actorType: "platform",
-            action: "PRODUCT_APPROVED",
-            entityType: "product",
-            entityId: productId,
-            metadata: { note },
-          },
-        });
+      await tx.auditLog.create({
+        data: {
+          sellerId: product.sellerId,
+          actorId,
+          actorType: "platform",
+          action: "PRODUCT_APPROVED",
+          entityType: "product",
+          entityId: productId,
+          metadata: { note },
+        },
+      });
 
-        return result;
-      }),
+      return { updated, product };
+    });
+
+    const [owner, seller] = await Promise.all([
       db.sellerMember.findFirst({
         where: { sellerId: product.sellerId, role: { name: "owner" } },
         select: { userId: true },
@@ -382,36 +396,36 @@ export const productService = {
   },
 
   async rejectProduct(productId: string, actorId: string, reason: string) {
-    const product = await db.product.findUnique({ where: { id: productId } });
-    if (!product) throw new Error("Product not found");
-    if (product.status !== "PENDING") throw new Error("Product is not pending");
+    const { updated, product } = await withTenantScope(async (tx) => {
+      const product = await tx.product.findUnique({ where: { id: productId } });
+      if (!product) throw new Error("Product not found");
+      if (product.status !== "PENDING") throw new Error("Product is not pending");
 
-    const [updated, owner, seller] = await Promise.all([
-      db.$transaction(async (tx) => {
-        const result = await tx.product.update({
-          where: { id: productId },
-          data: {
-            status: "REJECTED",
-            reviewedBy: actorId,
-            reviewNote: reason,
-            reviewedAt: new Date(),
-          },
-        });
+      const updated = await tx.product.update({
+        where: { id: productId },
+        data: {
+          status: "REJECTED",
+          reviewedBy: actorId,
+          reviewNote: reason,
+          reviewedAt: new Date(),
+        },
+      });
 
-        await tx.auditLog.create({
-          data: {
-            sellerId: product.sellerId,
-            actorId,
-            actorType: "platform",
-            action: "PRODUCT_REJECTED",
-            entityType: "product",
-            entityId: productId,
-            metadata: { reason },
-          },
-        });
+      await tx.auditLog.create({
+        data: {
+          sellerId: product.sellerId,
+          actorId,
+          actorType: "platform",
+          action: "PRODUCT_REJECTED",
+          entityType: "product",
+          entityId: productId,
+          metadata: { reason },
+        },
+      });
 
-        return result;
-      }),
+      return { updated, product };
+    });
+    const [owner, seller] = await Promise.all([
       db.sellerMember.findFirst({
         where: { sellerId: product.sellerId, role: { name: "owner" } },
         select: { userId: true },
@@ -438,25 +452,27 @@ export const productService = {
   },
 
   async listPendingProducts() {
-    const products = await db.product.findMany({
-      where: { status: "PENDING" },
-      select: {
-        id: true,
-        name: true,
-        price: true,
-        category: true,
-        status: true,
-        createdAt: true,
-        shop: {
-          select: {
-            id: true,
-            name: true,
-            seller: { select: { id: true, name: true, businessName: true } },
+    const products = await withTenantScope((tx) =>
+      tx.product.findMany({
+        where: { status: "PENDING" },
+        select: {
+          id: true,
+          name: true,
+          price: true,
+          category: true,
+          status: true,
+          createdAt: true,
+          shop: {
+            select: {
+              id: true,
+              name: true,
+              seller: { select: { id: true, name: true, businessName: true } },
+            },
           },
         },
-      },
-      orderBy: { createdAt: "asc" },
-    });
+        orderBy: { createdAt: "asc" },
+      })
+    );
     return products.map((p) => ({
       ...p,
       status: p.status.toLowerCase(),
@@ -492,8 +508,8 @@ export const productService = {
       ];
     }
 
-    const [data, total] = await Promise.all([
-      db.product.findMany({
+    const { data, total } = await withTenantScope(async (tx) => {
+      const data = await tx.product.findMany({
         where,
         select: {
           id: true,
@@ -515,9 +531,10 @@ export const productService = {
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * limit,
         take: limit,
-      }),
-      db.product.count({ where }),
-    ]);
+      });
+      const total = await tx.product.count({ where });
+      return { data, total };
+    });
 
     const mapped = data.map((p) => ({
       ...p,
@@ -532,14 +549,14 @@ export const productService = {
   },
 
   async deleteProduct(sellerId: string, actorId: string, productId: string) {
-    const product = await db.product.findFirst({
-      where: { id: productId, sellerId },
-    });
-    if (!product) throw new Error("Product not found");
-    if (product.status === "APPROVED")
-      throw new Error("Cannot delete approved product");
+    return withTenantScope(async (tx) => {
+      const product = await tx.product.findFirst({
+        where: { id: productId, sellerId },
+      });
+      if (!product) throw new Error("Product not found");
+      if (product.status === "APPROVED")
+        throw new Error("Cannot delete approved product");
 
-    return db.$transaction(async (tx) => {
       await tx.product.delete({ where: { id: productId } });
 
       await tx.auditLog.create({
@@ -564,82 +581,87 @@ export const productService = {
       shopId?: string;
     },
   ) {
-    let success = 0,
-      failed = 0;
+    return withTenantScope(async (tx) => {
+      let success = 0,
+        failed = 0;
 
-    for (const productId of data.productIds) {
-      try {
-        const product = await db.product.findFirst({
-          where: { id: productId, sellerId },
-        });
-        if (!product) {
-          failed++;
-          continue;
-        }
-
-        if (data.action === "change_status" && data.status) {
-          await db.product.update({
-            where: { id: productId },
-            data: { status: data.status },
+      for (const productId of data.productIds) {
+        try {
+          const product = await tx.product.findFirst({
+            where: { id: productId, sellerId },
           });
-        } else if (data.action === "assign_shop" && data.shopId) {
-          const shop = await db.shop.findFirst({
-            where: { id: data.shopId, sellerId },
-          });
-          if (!shop) {
+          if (!product) {
             failed++;
             continue;
           }
-          await db.product.update({
-            where: { id: productId },
-            data: { shopId: data.shopId },
-          });
-        } else if (data.action === "delete") {
-          if (product.status === "APPROVED") {
+
+          if (data.action === "change_status" && data.status) {
+            await tx.product.update({
+              where: { id: productId },
+              data: { status: data.status },
+            });
+          } else if (data.action === "assign_shop" && data.shopId) {
+            const shop = await tx.shop.findFirst({
+              where: { id: data.shopId, sellerId },
+            });
+            if (!shop) {
+              failed++;
+              continue;
+            }
+            await tx.product.update({
+              where: { id: productId },
+              data: { shopId: data.shopId },
+            });
+          } else if (data.action === "delete") {
+            if (product.status === "APPROVED") {
+              failed++;
+              continue;
+            }
+            await tx.product.delete({ where: { id: productId } });
+          } else {
             failed++;
             continue;
           }
-          await db.product.delete({ where: { id: productId } });
-        } else {
+          success++;
+        } catch (err: any) {
+          logger.error({ err: err.message, productId, action: data.action }, "Bulk product action item failed");
           failed++;
-          continue;
         }
-        success++;
-      } catch {
-        failed++;
       }
-    }
 
-    await db.auditLog.create({
-      data: {
-        sellerId,
-        actorId,
-        actorType: "seller",
-        action: "PRODUCT_BULK_ACTION",
-        entityType: "product",
-        entityId: "bulk",
-        metadata: { action: data.action, success, failed },
-      },
+      await tx.auditLog.create({
+        data: {
+          sellerId,
+          actorId,
+          actorType: "seller",
+          action: "PRODUCT_BULK_ACTION",
+          entityType: "product",
+          entityId: "bulk",
+          metadata: { action: data.action, success, failed },
+        },
+      });
+
+      return { success, failed };
     });
-
-    return { success, failed };
   },
   async exportProductsCsv(sellerId: string, shopId?: string) {
-    return db.product.findMany({
-      where: { sellerId, ...(shopId && { shopId }) },
-      select: {
-        id: true,
-        displayId: true,
-        name: true,
-        price: true,
-        stock: true,
-        status: true,
-        sku: true,
-        createdAt: true,
-        shop: { select: { name: true } },
-        category: { select: { name: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    });
+    return withTenantScope((tx) =>
+      tx.product.findMany({
+        where: { sellerId, ...(shopId && { shopId }) },
+        select: {
+          id: true,
+          displayId: true,
+          name: true,
+          price: true,
+          stock: true,
+          status: true,
+          sku: true,
+          createdAt: true,
+          shop: { select: { name: true } },
+          category: { select: { name: true } },
+        },
+        orderBy: { createdAt: "desc" },
+      })
+    );
   },
 };

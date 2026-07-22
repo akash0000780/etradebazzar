@@ -8,7 +8,6 @@ export const searchProductsSchema = z.object({
         maxPrice: z.string().regex(/^\d+(\.\d+)?$/, "Invalid maxPrice").optional(),
         sellerId: z.string().optional(),
         shopId: z.string().optional(),
-        status: z.enum(["PENDING", "APPROVED", "REJECTED"]).optional(),
         page: z.string().regex(/^\d+$/, "Invalid page").optional(),
         limit: z.string().regex(/^\d+$/, "Invalid limit").optional(),
     }),

@@ -1,3 +1,4 @@
+import { db } from "../../db/index";
 import { StorageFactory } from "../../lib/storage/storage.factory";
 import { randomUUID } from "crypto";
 
@@ -9,12 +10,12 @@ const ALLOWED_TYPES: Record<string, string> = {
     "application/pdf": ".pdf",
 };
 
-const ALLOWED_CATEGORIES = ["shop-assets", "kyc-documents"] as const;
+const ALLOWED_CATEGORIES = ["customer-uploads", "shop-assets", "kyc-documents"] as const;
 type AssetCategory = (typeof ALLOWED_CATEGORIES)[number];
 
-// Per-category max file size. Falls back to DEFAULT_MAX_SIZE if a category
 const DEFAULT_MAX_SIZE = 10 * 1024 * 1024; // 10MB
 const CATEGORY_MAX_SIZE: Record<AssetCategory, number> = {
+    "customer-uploads": 10 * 1024 * 1024, // 10MB
     "shop-assets": 10 * 1024 * 1024, // 10MB
     "kyc-documents": 5 * 1024 * 1024, // 5MB
 };
@@ -34,7 +35,7 @@ function assertSafeFile(file: Express.Multer.File, category: AssetCategory): str
 }
 
 export const uploadAssetService = {
-    async uploadAsset(userId: string, file: Express.Multer.File, category: AssetCategory = "shop-assets") {
+    async uploadAsset(userId: string, file: Express.Multer.File, category: AssetCategory = "customer-uploads") {
         if (!ALLOWED_CATEGORIES.includes(category)) {
             throw new Error(`Invalid category. Allowed: ${ALLOWED_CATEGORIES.join(", ")}`);
         }
@@ -51,11 +52,28 @@ export const uploadAssetService = {
             contentDisposition: "attachment",
         });
 
-        return {
-            id: randomUUID(),
-            url: upload.url,
-            key: upload.key,
-            fileType: file.mimetype,
-        };
+        return db.customerUploadAsset.create({
+            data: { userId, url: upload.url, key: upload.key, fileType: file.mimetype },
+        });
+    },
+
+    async listRecent(userId: string, limit = 20) {
+        const cappedLimit = Math.min(limit, 100);
+        return db.customerUploadAsset.findMany({
+            where: { userId },
+            orderBy: { createdAt: "desc" },
+            take: cappedLimit,
+        });
+    },
+
+    async deleteAsset(userId: string, assetId: string) {
+        const asset = await db.customerUploadAsset.findFirst({ where: { id: assetId, userId } });
+        if (!asset) throw new Error("Asset not found");
+
+        const storage = StorageFactory.get();
+        await storage.delete({ key: asset.key }).catch(() => null);
+
+        await db.customerUploadAsset.delete({ where: { id: assetId } });
+        return { deleted: true };
     },
 };

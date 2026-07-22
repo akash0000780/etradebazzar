@@ -8,6 +8,7 @@ const clientErrors = [
     "Top-up amount must be positive",
     "Wallet not found",
     "Insufficient credits",
+    "This top-up has already been processed",
 ];
 
 export const walletController = {

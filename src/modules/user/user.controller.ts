@@ -12,7 +12,7 @@ export const userController = {
         page: page ? parseInt(page) : undefined,
         limit: limit ? parseInt(limit) : undefined,
       });
-      return res.json(result);
+      return res.json({ success: true, data: result.data, meta: result.meta });
     } catch (error: any) {
       logger.error({ err: error.message }, "List users failed");
       return res

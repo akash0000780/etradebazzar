@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { shopController } from "./shop.controller";
 import { protect } from "../../middleware/auth";
-import { resolveTenant, setPlatformAdmin } from "../../middleware/tenant";
-import { requirePlatformRole, requireSellerRole } from "../../middleware/rbac";
+import { resolveTenant, requirePlatformAdmin } from "../../middleware/tenant";
+import { requireSellerRole } from "../../middleware/rbac";
 import { validate } from "../../utils/validate";
 import { sellerLimiter } from "../../middleware/rate-limit";
 import {
@@ -21,37 +21,9 @@ router.get(
   "/all",
   protect,
   sellerLimiter,
-  setPlatformAdmin,
-  requirePlatformRole("super_admin"),
+  requirePlatformAdmin("super_admin"),
   shopController.listAllShops,
 );
-
-// platform admin
-// router.get(
-//     "/pending",
-//     protect,
-//     setPlatformAdmin,
-//     requirePlatformRole("super_admin", "onboarding_manager", "product_reviewer"),
-//     shopController.listPendingShops
-// );
-
-// router.patch(
-//     "/:shopId/approve",
-//     protect,
-//     setPlatformAdmin,
-//     requirePlatformRole("super_admin", "onboarding_manager"),
-//     validate(reviewShopSchema),
-//     shopController.approveShop
-// );
-
-// router.patch(
-//     "/:shopId/reject",
-//     protect,
-//     setPlatformAdmin,
-//     requirePlatformRole("super_admin", "onboarding_manager"),
-//     validate(rejectShopSchema),
-//     shopController.rejectShop
-// );
 
 // seller (tenant)
 router.post(

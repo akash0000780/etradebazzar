@@ -3,10 +3,9 @@ import { StorageFactory } from "../../lib/storage/storage.factory";
 import { generateProductImageKey, validateImageFile } from "../../lib/storage/storage.utils";
 
 const MAX_IMAGES_PER_PRODUCT = 20;
-
-export const resolveImageUrls = async <T extends { key: string; url: string }>(
+export async function resolveImageUrls<T extends { key: string; url: string }>(
     images: T[],
-): Promise<T[]> => {
+): Promise<T[]> {
     if (images.length === 0) return images;
     const storage = StorageFactory.get();
     return Promise.all(
@@ -96,5 +95,5 @@ export const productImageService = {
             orderBy: { order: "asc" },
         });
         return resolveImageUrls(images);
-    },
+    }
 };

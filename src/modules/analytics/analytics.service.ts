@@ -5,6 +5,7 @@ import {
 } from "../../lib/analytics/analytics.registry";
 
 type Period = "7d" | "30d" | "90d";
+const MAX_LIMIT = 100;
 
 function getPeriodDate(period: Period): Date {
   const days = { "7d": 7, "30d": 30, "90d": 90 };
@@ -59,11 +60,12 @@ export const analyticsService = {
   },
 
   async getSellerTopProducts(sellerId: string, limit = 10) {
+    const cappedLimit = Math.min(limit, MAX_LIMIT);
     return db.$queryRaw<any[]>`
             SELECT * FROM mv_seller_product_stats
             WHERE seller_id = ${sellerId}
             ORDER BY total_revenue DESC
-            LIMIT ${limit}
+            LIMIT ${cappedLimit}
         `;
   },
 
@@ -141,11 +143,12 @@ export const analyticsService = {
   },
 
   async getTopSellers(limit = 10) {
+    const cappedLimit = Math.min(limit, MAX_LIMIT);
     const rows = await db.$queryRaw<any[]>`
             SELECT * FROM mv_platform_seller_stats
             WHERE status = 'APPROVED'
             ORDER BY gmv DESC
-            LIMIT ${limit}
+            LIMIT ${cappedLimit}
         `;
     return rows.map((r) => ({
       sellerId: r.seller_id,

@@ -2,7 +2,10 @@ import { db } from "../../db/index";
 import { logger } from "../../utils/logger";
 import { notificationService } from "../notification/notification.service";
 import { generateDisplayId } from "../../lib/uid/uid.generator";
-import { withTenantScope, withOptionalTenantScope } from "../../middleware/tenant";
+import {
+  withTenantScope,
+  withOptionalTenantScope,
+} from "../../middleware/tenant";
 import { resolveImageUrls } from "./product-image.service";
 
 const SKU_UNIQUE_CONSTRAINT = "products_sku_key";
@@ -13,7 +16,10 @@ function isUniqueConstraintError(err: any, constraintName: string): boolean {
 
 async function validateProductAttributes(
   categoryId: string,
-  attributes: Record<string, string | number | boolean | null> | null | undefined,
+  attributes:
+    | Record<string, string | number | boolean | null>
+    | null
+    | undefined,
 ): Promise<void> {
   const definitions = await db.categoryAttribute.findMany({
     where: { categoryId, isVariant: false },
@@ -36,7 +42,11 @@ async function validateProductAttributes(
     if (def.required && isEmpty) {
       throw new Error(`Missing required attribute "${def.label}"`);
     }
-    if (!isEmpty && def.type === "ENUM" && !def.options.includes(String(value))) {
+    if (
+      !isEmpty &&
+      def.type === "ENUM" &&
+      !def.options.includes(String(value))
+    ) {
       throw new Error(`Invalid value for attribute "${def.label}"`);
     }
   }
@@ -172,8 +182,14 @@ export const productService = {
           const effectiveAttributes =
             data.attributes !== undefined
               ? data.attributes
-              : (product.attributes as Record<string, string | number | boolean | null> | null);
-          await validateProductAttributes(effectiveCategoryId, effectiveAttributes);
+              : (product.attributes as Record<
+                  string,
+                  string | number | boolean | null
+                > | null);
+          await validateProductAttributes(
+            effectiveCategoryId,
+            effectiveAttributes,
+          );
         }
 
         const updated = await tx.product.update({
@@ -213,7 +229,7 @@ export const productService = {
           shop: { select: { id: true, name: true, slug: true } },
           category: { select: { id: true, name: true } },
         },
-      })
+      }),
     );
     if (!product) throw new Error("Product not found");
 
@@ -253,7 +269,7 @@ export const productService = {
           },
           category: { select: { id: true, name: true } },
         },
-      })
+      }),
     );
     if (!product) throw new Error("Product not found");
 
@@ -322,7 +338,10 @@ export const productService = {
     });
 
     const withSignedImages = await Promise.all(
-      data.map(async (p) => ({ ...p, images: await resolveImageUrls(p.images) })),
+      data.map(async (p) => ({
+        ...p,
+        images: await resolveImageUrls(p.images),
+      })),
     );
 
     const mapped = withSignedImages.map((p) => ({
@@ -342,7 +361,8 @@ export const productService = {
     const { updated, product } = await withTenantScope(async (tx) => {
       const product = await tx.product.findUnique({ where: { id: productId } });
       if (!product) throw new Error("Product not found");
-      if (product.status !== "PENDING") throw new Error("Product is not pending");
+      if (product.status !== "PENDING")
+        throw new Error("Product is not pending");
 
       const updated = await tx.product.update({
         where: { id: productId },
@@ -399,7 +419,8 @@ export const productService = {
     const { updated, product } = await withTenantScope(async (tx) => {
       const product = await tx.product.findUnique({ where: { id: productId } });
       if (!product) throw new Error("Product not found");
-      if (product.status !== "PENDING") throw new Error("Product is not pending");
+      if (product.status !== "PENDING")
+        throw new Error("Product is not pending");
 
       const updated = await tx.product.update({
         where: { id: productId },
@@ -471,7 +492,7 @@ export const productService = {
           },
         },
         orderBy: { createdAt: "asc" },
-      })
+      }),
     );
     return products.map((p) => ({
       ...p,
@@ -483,6 +504,7 @@ export const productService = {
   async listAllProducts(filters: {
     status?: string;
     search?: string;
+    sellerId?: string;
     page?: number;
     limit?: number;
   }) {
@@ -500,6 +522,9 @@ export const productService = {
     const where: any = {};
     if (filters.status && filters.status !== "all") {
       where.status = STATUS_MAP[filters.status] ?? filters.status.toUpperCase();
+    }
+    if (filters.sellerId) {
+      where.shop = { sellerId: filters.sellerId };
     }
     if (filters.search) {
       where.OR = [
@@ -538,6 +563,7 @@ export const productService = {
 
     const mapped = data.map((p) => ({
       ...p,
+      seller: p.shop?.seller ?? null,
       status: p.status.toLowerCase(),
       price: p.price ? Number(p.price) : null,
     }));
@@ -624,7 +650,10 @@ export const productService = {
           }
           success++;
         } catch (err: any) {
-          logger.error({ err: err.message, productId, action: data.action }, "Bulk product action item failed");
+          logger.error(
+            { err: err.message, productId, action: data.action },
+            "Bulk product action item failed",
+          );
           failed++;
         }
       }
@@ -661,7 +690,7 @@ export const productService = {
           category: { select: { name: true } },
         },
         orderBy: { createdAt: "desc" },
-      })
+      }),
     );
   },
 };

@@ -34,7 +34,10 @@ export const productController = {
         "KYC not verified",
         "Category not found",
       ];
-      if (clientErrors.includes(error.message) || isAttributeError(error.message)) {
+      if (
+        clientErrors.includes(error.message) ||
+        isAttributeError(error.message)
+      ) {
         return res.status(400).json({ success: false, error: error.message });
       }
       return res
@@ -63,7 +66,10 @@ export const productController = {
         "SKU already exists",
         "Category not found",
       ];
-      if (clientErrors.includes(error.message) || isAttributeError(error.message)) {
+      if (
+        clientErrors.includes(error.message) ||
+        isAttributeError(error.message)
+      ) {
         return res.status(400).json({ success: false, error: error.message });
       }
       return res
@@ -121,8 +127,7 @@ export const productController = {
         search,
         page: page ? Number(page) : undefined,
         limit: limit ? Number(limit) : undefined,
-      },
-    );
+      });
       return res.json({ success: true, data: result.data, meta: result.meta });
     } catch (error: any) {
       logger.error({ err: error.message }, "List products failed");
@@ -192,13 +197,14 @@ export const productController = {
 
   async listAllProducts(req: Request, res: Response) {
     try {
-      const { status, search, page, limit } = req.query as Record<
+      const { status, search, sellerId, page, limit } = req.query as Record<
         string,
         string
       >;
       const result = await productService.listAllProducts({
         status,
         search,
+        sellerId,
         page: page ? Number(page) : undefined,
         limit: limit ? Number(limit) : undefined,
       });

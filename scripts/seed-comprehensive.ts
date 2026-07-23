@@ -5,6 +5,7 @@ import {
   seedPlatformPermissions,
 } from "../src/lib/permission/permission.service";
 import { generateDisplayId } from "../src/lib/uid/uid.generator";
+import { encrypt } from "../src/utils/encryption";
 import { logger } from "../src/utils/logger";
 import bcrypt from "bcryptjs";
 
@@ -270,9 +271,12 @@ async function fixSellerPermissions() {
 
     if (existingPerms) continue;
 
-    await db.$transaction(async (tx) => {
-      await assignDefaultRolePermissions(tx, roles);
-    });
+    await db.$transaction(
+      async (tx) => {
+        await assignDefaultRolePermissions(tx, roles);
+      },
+      { timeout: 60000, maxWait: 60000 },
+    );
 
     const members = await db.sellerMember.findMany({
       where: { sellerId: seller.id },
@@ -305,9 +309,12 @@ async function seedComprehensive() {
   try {
     // 0. Seed platform permissions
     logger.info("Seeding platform permissions...");
-    await db.$transaction(async (tx) => {
-      await seedPlatformPermissions(tx);
-    });
+    await db.$transaction(
+      async (tx) => {
+        await seedPlatformPermissions(tx);
+      },
+      { timeout: 60000, maxWait: 60000 },
+    );
 
     // 1. Platform Roles
     logger.info("Seeding platform roles...");
@@ -564,13 +571,16 @@ async function seedComprehensive() {
         manager: managerRole,
         staff: staffRole,
       });
-      await db.$transaction(async (tx) => {
-        await assignDefaultRolePermissions(tx, [
-          ownerRole,
-          managerRole,
-          staffRole,
-        ]);
-      });
+      await db.$transaction(
+        async (tx) => {
+          await assignDefaultRolePermissions(tx, [
+            ownerRole,
+            managerRole,
+            staffRole,
+          ]);
+        },
+        { timeout: 60000, maxWait: 60000 },
+      );
       await db.sellerMember.create({
         data: {
           userId: allSellerUsers[i].id,

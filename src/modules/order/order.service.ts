@@ -17,7 +17,13 @@ const ORDER_LOCK_TTL = 15;
 const IDEMPOTENCY_TTL_SECONDS = 60 * 60 * 24; // 24h durable window
 
 async function acquireOrderLock(key: string): Promise<boolean> {
-  const result = await redis.set(`order:lock:${key}`, "1", "EX", ORDER_LOCK_TTL, "NX");
+  const result = await redis.set(
+    `order:lock:${key}`,
+    "1",
+    "EX",
+    ORDER_LOCK_TTL,
+    "NX",
+  );
   return result === "OK";
 }
 
@@ -25,7 +31,10 @@ async function releaseOrderLock(key: string): Promise<void> {
   await redis.del(`order:lock:${key}`);
 }
 
-function idempotencyRedisKey(customerId: string, idempotencyKey: string): string {
+function idempotencyRedisKey(
+  customerId: string,
+  idempotencyKey: string,
+): string {
   return `order:idem:${customerId}:${idempotencyKey}`;
 }
 
@@ -105,7 +114,6 @@ export const orderService = {
       couponCode?: string;
     },
   ) {
-
     const products = await db.product.findMany({
       where: {
         id: { in: data.items.map((i) => i.productId) },
@@ -134,17 +142,21 @@ export const orderService = {
       return { productId: item.productId, quantity: item.quantity, unitPrice };
     });
 
-    const discountAmount = data.discountAmount && data.discountAmount > 0
-      ? Math.min(data.discountAmount, totalAmount)
-      : 0;
-    const finalAmount = discountAmount > 0
-      ? parseFloat((totalAmount - discountAmount).toFixed(2))
-      : undefined;
+    const discountAmount =
+      data.discountAmount && data.discountAmount > 0
+        ? Math.min(data.discountAmount, totalAmount)
+        : 0;
+    const finalAmount =
+      discountAmount > 0
+        ? parseFloat((totalAmount - discountAmount).toFixed(2))
+        : undefined;
 
     const primaryItem = itemsData.reduce((max, cur) =>
-      cur.unitPrice * cur.quantity > max.unitPrice * max.quantity ? cur : max
+      cur.unitPrice * cur.quantity > max.unitPrice * max.quantity ? cur : max,
     );
-    const primaryProduct = products.find((p) => p.id === primaryItem.productId)!;
+    const primaryProduct = products.find(
+      (p) => p.id === primaryItem.productId,
+    )!;
     const categoryName = primaryProduct.category.name;
 
     const highTicket = await isHighTicket(
@@ -157,7 +169,8 @@ export const orderService = {
       primaryProduct.id,
       categoryName,
     );
-    const commissionAmount = ((finalAmount ?? totalAmount) * commissionRate) / 100;
+    const commissionAmount =
+      ((finalAmount ?? totalAmount) * commissionRate) / 100;
 
     const displayId = await generateDisplayId("order");
 
@@ -186,9 +199,10 @@ export const orderService = {
         }
       }
     }
-    const packingSla = initialStatus === "CONFIRMED"
-      ? await slaConfigService.getSlaConfig()
-      : null;
+    const packingSla =
+      initialStatus === "CONFIRMED"
+        ? await slaConfigService.getSlaConfig()
+        : null;
     const packingDeadline = packingSla?.packing_sla_hour
       ? new Date(Date.now() + packingSla.packing_sla_hour * 60 * 60 * 1000)
       : undefined;
@@ -247,7 +261,13 @@ export const orderService = {
           action: "ORDER_CREATED",
           entityType: "order",
           entityId: created.id,
-          metadata: { type: orderType, totalAmount, finalAmount, discountAmount, couponCode: data.couponCode },
+          metadata: {
+            type: orderType,
+            totalAmount,
+            finalAmount,
+            discountAmount,
+            couponCode: data.couponCode,
+          },
         },
       });
 
@@ -323,7 +343,12 @@ export const orderService = {
         return this.getOrder(raceFixed, customerId);
       }
 
-      const order = await this._createBulkOrderInner(customerId, sellerId, items, file);
+      const order = await this._createBulkOrderInner(
+        customerId,
+        sellerId,
+        items,
+        file,
+      );
       await redis.setex(idemKey, IDEMPOTENCY_TTL_SECONDS, order.id);
       return order;
     } finally {
@@ -349,7 +374,9 @@ export const orderService = {
 
     if (!rows.length) throw new Error("XLS file is empty");
     if (rows.length > MAX_BULK_ROWS) {
-      throw new Error(`Bulk upload exceeds maximum of ${MAX_BULK_ROWS} addresses`);
+      throw new Error(
+        `Bulk upload exceeds maximum of ${MAX_BULK_ROWS} addresses`,
+      );
     }
 
     const requiredCols = [
@@ -384,9 +411,11 @@ export const orderService = {
     });
 
     const primaryItem = itemsData.reduce((max, cur) =>
-      cur.unitPrice * cur.quantity > max.unitPrice * max.quantity ? cur : max
+      cur.unitPrice * cur.quantity > max.unitPrice * max.quantity ? cur : max,
     );
-    const primaryProduct = products.find((p) => p.id === primaryItem.productId)!;
+    const primaryProduct = products.find(
+      (p) => p.id === primaryItem.productId,
+    )!;
 
     const commissionRate = await getCommissionRate(
       primaryProduct.id,
@@ -480,7 +509,8 @@ export const orderService = {
     if (!order) throw new Error("Order not found");
 
     const isCustomer = actorType === "customer" && order.customerId === actorId;
-    const isOwningSeller = actorType === "seller" && sellerId && order.sellerId === sellerId;
+    const isOwningSeller =
+      actorType === "seller" && sellerId && order.sellerId === sellerId;
     if (!isCustomer && !isOwningSeller) {
       throw new Error("Order not found");
     }
@@ -532,7 +562,8 @@ export const orderService = {
     if (!order) throw new Error("Order not found");
 
     const isCustomer = actorType === "customer" && order.customerId === actorId;
-    const isOwningSeller = actorType === "seller" && sellerId && order.sellerId === sellerId;
+    const isOwningSeller =
+      actorType === "seller" && sellerId && order.sellerId === sellerId;
     if (!isCustomer && !isOwningSeller) {
       throw new Error("Order not found");
     }
@@ -652,7 +683,11 @@ export const orderService = {
 
     return db.$transaction(async (tx) => {
       const updateResult = await tx.orderAddress.updateMany({
-        where: { id: addressId, orderId, fulfillmentStatus: { not: "ASSIGNED" } },
+        where: {
+          id: addressId,
+          orderId,
+          fulfillmentStatus: { not: "ASSIGNED" },
+        },
         data: {
           assignedShopId: shopId,
           assignedBy: actorId,
@@ -673,9 +708,12 @@ export const orderService = {
         where: { id: orderId },
         data: {
           assignedShopId: shopId,
-          ...(!orderForDeadline?.packingDeadline && packing_sla_hours && {
-            packingDeadline: new Date(Date.now() + packing_sla_hours * 60 * 60 * 1000),
-          }),
+          ...(!orderForDeadline?.packingDeadline &&
+            packing_sla_hours && {
+              packingDeadline: new Date(
+                Date.now() + packing_sla_hours * 60 * 60 * 1000,
+              ),
+            }),
         },
       });
 
@@ -733,17 +771,23 @@ export const orderService = {
       throw new Error("Order has no shop assigned yet");
     }
 
-    const address = order.addresses.find((a) => a.assignedShopId === order.assignedShopId)
-      ?? order.addresses[0];
+    const address =
+      order.addresses.find((a) => a.assignedShopId === order.assignedShopId) ??
+      order.addresses[0];
     if (!address) throw new Error("Order address not found");
-    if (address.assignedShopId && address.assignedShopId !== order.assignedShopId) {
+    if (
+      address.assignedShopId &&
+      address.assignedShopId !== order.assignedShopId
+    ) {
       throw new Error("Assigned shop does not match the address assignment");
     }
 
     const { dispatch_upload_sla_hours } = await slaConfigService.getSlaConfig();
     const packedAt = new Date();
     const dispatchDeadline = dispatch_upload_sla_hours
-      ? new Date(packedAt.getTime() + dispatch_upload_sla_hours * 60 * 60 * 1000)
+      ? new Date(
+          packedAt.getTime() + dispatch_upload_sla_hours * 60 * 60 * 1000,
+        )
       : undefined;
 
     const updateResult = await db.order.updateMany({
@@ -766,7 +810,12 @@ export const orderService = {
     });
 
     try {
-      await shipmentService.createShipmentForPackedOrder(orderId, sellerId, order.assignedShopId, address.id);
+      await shipmentService.createShipmentForPackedOrder(
+        orderId,
+        sellerId,
+        order.assignedShopId,
+        address.id,
+      );
     } catch (err: any) {
       await db.auditLog.create({
         data: {
@@ -799,7 +848,12 @@ export const orderService = {
     });
   },
 
-  async getOrder(orderId: string, requesterId?: string, requesterSellerId?: string) {
+  async getOrder(
+    orderId: string,
+    requesterId?: string,
+    requesterSellerId?: string,
+    requesterRole?: string,
+  ) {
     const order = await db.order.findUnique({
       where: { id: orderId },
       include: {
@@ -827,9 +881,10 @@ export const orderService = {
     });
     if (!order) throw new Error("Order not found");
 
-    if (requesterId !== undefined) {
+    if (requesterId !== undefined && requesterRole !== "super_admin") {
       const isCustomer = order.customerId === requesterId;
-      const isOwningSeller = requesterSellerId && order.sellerId === requesterSellerId;
+      const isOwningSeller =
+        requesterSellerId && order.sellerId === requesterSellerId;
       if (!isCustomer && !isOwningSeller) {
         throw new Error("Order not found");
       }
@@ -929,16 +984,16 @@ export const orderService = {
         })),
         negotiation: latestNeg
           ? {
-            id: latestNeg.id,
-            orderId: latestNeg.orderId,
-            proposedBy:
-              latestNeg.proposedByType === "customer" ? "customer" : "seller",
-            proposedAmount: Number(latestNeg.proposedPrice),
-            message: latestNeg.note ?? undefined,
-            status: latestNeg.status.toLowerCase(),
-            createdAt: latestNeg.createdAt,
-            expiresAt: undefined,
-          }
+              id: latestNeg.id,
+              orderId: latestNeg.orderId,
+              proposedBy:
+                latestNeg.proposedByType === "customer" ? "customer" : "seller",
+              proposedAmount: Number(latestNeg.proposedPrice),
+              message: latestNeg.note ?? undefined,
+              status: latestNeg.status.toLowerCase(),
+              createdAt: latestNeg.createdAt,
+              expiresAt: undefined,
+            }
           : undefined,
       };
     });
@@ -1020,16 +1075,16 @@ export const orderService = {
         })),
         negotiation: latestNeg
           ? {
-            id: latestNeg.id,
-            orderId: latestNeg.orderId,
-            proposedBy:
-              latestNeg.proposedByType === "customer" ? "customer" : "seller",
-            proposedAmount: Number(latestNeg.proposedPrice),
-            message: latestNeg.note ?? undefined,
-            status: latestNeg.status.toLowerCase(),
-            createdAt: latestNeg.createdAt,
-            expiresAt: undefined,
-          }
+              id: latestNeg.id,
+              orderId: latestNeg.orderId,
+              proposedBy:
+                latestNeg.proposedByType === "customer" ? "customer" : "seller",
+              proposedAmount: Number(latestNeg.proposedPrice),
+              message: latestNeg.note ?? undefined,
+              status: latestNeg.status.toLowerCase(),
+              createdAt: latestNeg.createdAt,
+              expiresAt: undefined,
+            }
           : undefined,
       };
     });
@@ -1040,7 +1095,13 @@ export const orderService = {
     };
   },
 
-  async cancelOrder(orderId: string, actorId: string, actorType: string, requesterId?: string, requesterSellerId?: string,) {
+  async cancelOrder(
+    orderId: string,
+    actorId: string,
+    actorType: string,
+    requesterId?: string,
+    requesterSellerId?: string,
+  ) {
     const order = await db.order.findUnique({
       where: { id: orderId },
       include: { items: true },
@@ -1049,7 +1110,8 @@ export const orderService = {
 
     if (requesterId !== undefined) {
       const isCustomer = order.customerId === requesterId;
-      const isOwningSeller = requesterSellerId && order.sellerId === requesterSellerId;
+      const isOwningSeller =
+        requesterSellerId && order.sellerId === requesterSellerId;
       if (!isCustomer && !isOwningSeller) {
         throw new Error("Order not found");
       }
@@ -1112,10 +1174,15 @@ export const orderService = {
   ) {
     const MAX_BULK_ORDERS = 100;
     if (data.orderIds.length > MAX_BULK_ORDERS) {
-      throw new Error(`Cannot process more than ${MAX_BULK_ORDERS} orders at once`);
+      throw new Error(
+        `Cannot process more than ${MAX_BULK_ORDERS} orders at once`,
+      );
     }
 
-    const VALID_SOURCE_STATUSES: Record<"confirm" | "ship" | "cancel", OrderStatus[]> = {
+    const VALID_SOURCE_STATUSES: Record<
+      "confirm" | "ship" | "cancel",
+      OrderStatus[]
+    > = {
       confirm: ["PENDING", "PENDING_ASSIGNMENT", "NEGOTIATING"],
       ship: ["CONFIRMED", "PROCESSING"],
       cancel: [],
@@ -1159,7 +1226,10 @@ export const orderService = {
         }
         success++;
       } catch (err: any) {
-        logger.error({ err: err.message, orderId, action: data.action }, "Bulk order action item failed");
+        logger.error(
+          { err: err.message, orderId, action: data.action },
+          "Bulk order action item failed",
+        );
         failed++;
       }
     }
@@ -1179,7 +1249,9 @@ export const orderService = {
   ) {
     const MAX_BULK_ORDERS = 100;
     if (data.orderIds.length > MAX_BULK_ORDERS) {
-      throw new Error(`Cannot process more than ${MAX_BULK_ORDERS} orders at once`);
+      throw new Error(
+        `Cannot process more than ${MAX_BULK_ORDERS} orders at once`,
+      );
     }
 
     let success = 0,
@@ -1218,7 +1290,10 @@ export const orderService = {
         );
         success++;
       } catch (err: any) {
-        logger.error({ err: err.message, orderId }, "Bulk respond negotiation item failed");
+        logger.error(
+          { err: err.message, orderId },
+          "Bulk respond negotiation item failed",
+        );
         failed++;
       }
     }

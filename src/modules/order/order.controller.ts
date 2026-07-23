@@ -9,7 +9,11 @@ export const orderController = {
     try {
       const customerId = req.user!.id;
       const { idempotencyKey, ...orderData } = req.body;
-      const result = await orderService.createOrder(customerId, idempotencyKey, orderData);
+      const result = await orderService.createOrder(
+        customerId,
+        idempotencyKey,
+        orderData,
+      );
       return res.status(201).json({ success: true, data: result });
     } catch (error: any) {
       logger.error({ err: error.message }, "Create order failed");
@@ -19,7 +23,9 @@ export const orderController = {
         "Duplicate order submission detected, please wait",
       ];
       if (clientErrors.includes(error.message)) {
-        return res.status(error.message.includes("Duplicate") ? 409 : 400).json({ success: false, error: error.message });
+        return res
+          .status(error.message.includes("Duplicate") ? 409 : 400)
+          .json({ success: false, error: error.message });
       }
       return res
         .status(500)
@@ -37,14 +43,22 @@ export const orderController = {
           .status(400)
           .json({ success: false, error: "XLS file required" });
 
-      const parsedItems = typeof req.body.items === "string" ? JSON.parse(req.body.items) : req.body.items;
+      const parsedItems =
+        typeof req.body.items === "string"
+          ? JSON.parse(req.body.items)
+          : req.body.items;
       const parsed = createBulkOrderSchema.shape.body.safeParse({
         idempotencyKey: req.body.idempotencyKey,
         sellerId: req.body.sellerId,
         items: parsedItems,
       });
       if (!parsed.success) {
-        return res.status(400).json({ success: false, error: parsed.error.issues[0]?.message ?? "Invalid request" });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: parsed.error.issues[0]?.message ?? "Invalid request",
+          });
       }
 
       const result = await orderService.createBulkOrder(
@@ -67,7 +81,9 @@ export const orderController = {
         error.message.startsWith("Missing columns") ||
         error.message.startsWith("Bulk upload exceeds")
       ) {
-        return res.status(error.message.includes("Duplicate") ? 409 : 400).json({ success: false, error: error.message });
+        return res
+          .status(error.message.includes("Duplicate") ? 409 : 400)
+          .json({ success: false, error: error.message });
       }
       return res
         .status(500)
@@ -105,7 +121,9 @@ export const orderController = {
         "Order not found",
       ];
       if (clientErrors.includes(error.message)) {
-        return res.status(error.message === "Order not found" ? 404 : 400).json({ success: false, error: error.message });
+        return res
+          .status(error.message === "Order not found" ? 404 : 400)
+          .json({ success: false, error: error.message });
       }
       return res
         .status(500)
@@ -149,7 +167,11 @@ export const orderController = {
       const sellerId = req.seller!.id;
       const actorId = req.user!.id;
       const { orderId } = req.params;
-      const result = await orderService.markPacked(orderId as string, sellerId, actorId);
+      const result = await orderService.markPacked(
+        orderId as string,
+        sellerId,
+        actorId,
+      );
       return res.json({ success: true, data: result });
     } catch (error: any) {
       logger.error({ err: error.message }, "Mark packed failed");
@@ -159,10 +181,16 @@ export const orderController = {
         "Order address not found",
         "Assigned shop does not match the address assignment",
       ];
-      if (clientErrors.includes(error.message) || error.message.startsWith("Cannot mark packed") || error.message.includes("already packed")) {
+      if (
+        clientErrors.includes(error.message) ||
+        error.message.startsWith("Cannot mark packed") ||
+        error.message.includes("already packed")
+      ) {
         return res.status(400).json({ success: false, error: error.message });
       }
-      return res.status(500).json({ success: false, error: "Internal server error" });
+      return res
+        .status(500)
+        .json({ success: false, error: "Internal server error" });
     }
   },
   async setThreshold(req: Request, res: Response) {
@@ -197,7 +225,12 @@ export const orderController = {
   async getOrder(req: Request, res: Response) {
     try {
       const { orderId } = req.params;
-      const result = await orderService.getOrder(orderId as string, req.user?.id, req.seller?.id);
+      const result = await orderService.getOrder(
+        orderId as string,
+        req.user?.id,
+        req.seller?.id,
+        req.user?.role,
+      );
       return res.json({ success: true, data: result });
     } catch (error: any) {
       logger.error({ err: error.message }, "Get order failed");
@@ -371,20 +404,32 @@ export const orderController = {
   },
 };
 
-async function submitProposalImpl(req: Request, res: Response, actorType: "customer" | "seller") {
+async function submitProposalImpl(
+  req: Request,
+  res: Response,
+  actorType: "customer" | "seller",
+) {
   try {
     const { orderId } = req.params;
     const actorId = req.user!.id;
     const result = await orderService.submitProposal(
-      orderId as string, actorId, actorType, req.seller?.id, req.body,
+      orderId as string,
+      actorId,
+      actorType,
+      req.seller?.id,
+      req.body,
     );
     return res.status(201).json({ success: true, data: result });
   } catch (error: any) {
     logger.error({ err: error.message }, "Submit proposal failed");
     const clientErrors = ["Order not found", "Order is not in negotiation"];
     if (clientErrors.includes(error.message)) {
-      return res.status(error.message === "Order not found" ? 404 : 400).json({ success: false, error: error.message });
+      return res
+        .status(error.message === "Order not found" ? 404 : 400)
+        .json({ success: false, error: error.message });
     }
-    return res.status(500).json({ success: false, error: "Internal server error" });
+    return res
+      .status(500)
+      .json({ success: false, error: "Internal server error" });
   }
 }

@@ -21,11 +21,16 @@ async function resolvePickupCityState(
     if (!city) city = pincodeDetails.city;
     if (!state) state = pincodeDetails.state;
   } catch (error: any) {
-    logger.warn({ err: error.message, pincode }, "Failed to auto-fill pickup city/state from pincode");
+    logger.warn(
+      { err: error.message, pincode },
+      "Failed to auto-fill pickup city/state from pincode",
+    );
   }
 
   if (!city || !state) {
-    throw new Error("Pickup city and state could not be determined from the provided pincode. Please provide them manually.");
+    throw new Error(
+      "Pickup city and state could not be determined from the provided pincode. Please provide them manually.",
+    );
   }
 
   return { city, state };
@@ -40,16 +45,27 @@ function generateSlug(name: string): string {
     .replace(/-+/g, "-");
 }
 
-export async function resolveShopMediaUrls<T extends { logo?: string | null; logoKey?: string | null; banner?: string | null; bannerKey?: string | null }>(
-  shop: T,
-): Promise<T> {
+export async function resolveShopMediaUrls<
+  T extends {
+    logo?: string | null;
+    logoKey?: string | null;
+    banner?: string | null;
+    bannerKey?: string | null;
+  },
+>(shop: T): Promise<T> {
   const storage = StorageFactory.get();
   const result = { ...shop };
   if (shop.logoKey) {
-    result.logo = await storage.getSignedUrl({ key: shop.logoKey, expiresIn: 3600 });
+    result.logo = await storage.getSignedUrl({
+      key: shop.logoKey,
+      expiresIn: 3600,
+    });
   }
   if (shop.bannerKey) {
-    result.banner = await storage.getSignedUrl({ key: shop.bannerKey, expiresIn: 3600 });
+    result.banner = await storage.getSignedUrl({
+      key: shop.bannerKey,
+      expiresIn: 3600,
+    });
   }
   return result;
 }
@@ -79,9 +95,12 @@ export const shopService = {
     if (!seller) throw new Error("Seller not found");
     if (seller.status !== "APPROVED") throw new Error("Seller not approved");
 
-    const { city: pickupCity, state: pickupState } = await resolvePickupCityState(
-      data.pickupPincode, data.pickupCity, data.pickupState,
-    );
+    const { city: pickupCity, state: pickupState } =
+      await resolvePickupCityState(
+        data.pickupPincode,
+        data.pickupCity,
+        data.pickupState,
+      );
 
     const baseSlug = generateSlug(data.name);
     const displayId = await generateDisplayId("shop");
@@ -90,9 +109,16 @@ export const shopService = {
       return await withTenantScope(async (tx) => {
         const slug = `${baseSlug}-${Date.now()}`;
 
-
         const newShop = await tx.shop.create({
-          data: { sellerId, slug, displayId, status: "APPROVED", ...data, pickupCity, pickupState },
+          data: {
+            sellerId,
+            slug,
+            displayId,
+            status: "APPROVED",
+            ...data,
+            pickupCity,
+            pickupState,
+          },
         });
 
         await tx.auditLog.create({
@@ -111,7 +137,9 @@ export const shopService = {
       });
     } catch (err: any) {
       if (err.code === "P2002") {
-        throw new Error("A shop with a conflicting slug already exists, please try again");
+        throw new Error(
+          "A shop with a conflicting slug already exists, please try again",
+        );
       }
       throw err;
     }
@@ -163,14 +191,18 @@ export const shopService = {
           existing.pickupPincode !== data.pickupPincode
         ) {
           const { city, state } = await resolvePickupCityState(
-            data.pickupPincode, data.pickupCity, data.pickupState,
+            data.pickupPincode,
+            data.pickupCity,
+            data.pickupState,
           );
           updateData.pickupCity = city;
           updateData.pickupState = state;
         }
 
-        if (data.logoKey && data.logoKey !== existing.logoKey) oldLogoKey = existing.logoKey;
-        if (data.bannerKey && data.bannerKey !== existing.bannerKey) oldBannerKey = existing.bannerKey;
+        if (data.logoKey && data.logoKey !== existing.logoKey)
+          oldLogoKey = existing.logoKey;
+        if (data.bannerKey && data.bannerKey !== existing.bannerKey)
+          oldBannerKey = existing.bannerKey;
       }
     }
 
@@ -183,7 +215,9 @@ export const shopService = {
         });
 
         if (updateResult.count === 0) {
-          const exists = await tx.shop.findFirst({ where: { id: shopId, sellerId } });
+          const exists = await tx.shop.findFirst({
+            where: { id: shopId, sellerId },
+          });
           if (!exists) throw new Error("Shop not found");
           throw new Error("Cannot update rejected shop");
         }
@@ -204,7 +238,9 @@ export const shopService = {
       });
     } catch (err: any) {
       if (err.code === "P2002") {
-        throw new Error("A shop with a conflicting slug already exists, please try again");
+        throw new Error(
+          "A shop with a conflicting slug already exists, please try again",
+        );
       }
       throw err;
     }
@@ -238,7 +274,7 @@ export const shopService = {
         include: {
           _count: { select: { products: true } },
         },
-      })
+      }),
     );
     if (!shop) throw new Error("Shop not found");
     return resolveShopMediaUrls(shop);
@@ -257,7 +293,10 @@ export const shopService = {
     const page = filters.page ?? 1;
     const limit = Math.min(filters.limit ?? 20, 100);
 
-    const accessibleShopIds = await shopAccessService.getAccessibleShopIds(sellerId, userId);
+    const accessibleShopIds = await shopAccessService.getAccessibleShopIds(
+      sellerId,
+      userId,
+    );
     const where: any = { sellerId };
 
     if (accessibleShopIds !== null) where.id = { in: accessibleShopIds };
@@ -267,7 +306,6 @@ export const shopService = {
         active: "APPROVED",
         pending: "PENDING",
         inactive: "REJECTED",
-        suspended: "SUSPENDED",
       };
       where.status =
         STATUS_REVERSE[filters.status] ?? filters.status.toUpperCase();
@@ -307,7 +345,6 @@ export const shopService = {
       PENDING: "pending",
       APPROVED: "active",
       REJECTED: "inactive",
-      SUSPENDED: "suspended",
     };
 
     const withSignedUrls = await Promise.all(data.map(resolveShopMediaUrls));
@@ -338,7 +375,6 @@ export const shopService = {
         active: "APPROVED",
         pending: "PENDING",
         inactive: "REJECTED",
-        suspended: "SUSPENDED",
       };
       where.status =
         STATUS_REVERSE[filters.status] ?? filters.status.toUpperCase();
@@ -385,7 +421,6 @@ export const shopService = {
       PENDING: "pending",
       APPROVED: "active",
       REJECTED: "inactive",
-      SUSPENDED: "suspended",
     };
 
     const withSignedUrls = await Promise.all(data.map(resolveShopMediaUrls));

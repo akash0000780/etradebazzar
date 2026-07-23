@@ -10,7 +10,9 @@ export const createShopSchema = z.object({
     banner: z.string().url().optional(),
     bannerKey: z.string().optional(),
     contactEmail: z.string().email(),
-    contactPhone: z.string().regex(/^\+?[6-9]\d{9}$/, "Invalid phone number"),
+    contactPhone: z
+      .string()
+      .regex(/^(\+91)?[6-9]\d{9}$/, "Invalid phone number"),
     returnPolicy: z.string().optional(),
     pickupStreet: z.string().min(5),
     pickupCity: z.string().min(2).optional(),
@@ -32,12 +34,18 @@ export const updateShopSchema = z.object({
     banner: z.string().url().optional(),
     bannerKey: z.string().optional(),
     contactEmail: z.string().email().optional(),
-    contactPhone: z.string().regex(/^\+?[6-9]\d{9}$/, "Invalid phone number").optional(),
+    contactPhone: z
+      .string()
+      .regex(/^(\+91)?[6-9]\d{9}$/, "Invalid phone number")
+      .optional(),
     returnPolicy: z.string().optional(),
     pickupStreet: z.string().min(5).optional(),
     pickupCity: z.string().min(2).optional(),
     pickupState: z.string().min(2).optional(),
-    pickupPincode: z.string().regex(/^\d{6}$/, "Invalid pincode").optional(),
+    pickupPincode: z
+      .string()
+      .regex(/^\d{6}$/, "Invalid pincode")
+      .optional(),
   }),
 });
 
